@@ -22,8 +22,11 @@ coven daemon start
 coven run codex "fix tests"
 coven run claude "polish this UI"
 coven sessions
+coven sessions --json
 coven attach <session-id>
 ```
+
+`coven sessions --json` returns a compact machine-readable contract shaped as `{ "sessions": [...] }` for clients such as comux.
 
 ## Status
 

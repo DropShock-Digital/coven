@@ -8,6 +8,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
+use serde::Serialize;
 use uuid::Uuid;
 
 mod api;
@@ -50,7 +51,10 @@ enum Command {
         #[arg(long)]
         detach: bool,
     },
-    Sessions,
+    Sessions {
+        #[arg(long)]
+        json: bool,
+    },
     Attach {
         session_id: String,
     },
@@ -77,7 +81,7 @@ fn main() -> Result<()> {
             title,
             detach,
         } => run_session(&harness, &prompt, cwd.as_deref(), title.as_deref(), detach),
-        Command::Sessions => list_sessions(),
+        Command::Sessions { json } => list_sessions(json),
         Command::Attach { session_id } => attach_session(&session_id),
     }
 }
@@ -221,10 +225,15 @@ fn run_session(
     }
 }
 
-fn list_sessions() -> Result<()> {
+fn list_sessions(json: bool) -> Result<()> {
     let store_path = coven_store_path()?;
     let conn = store::open_store(&store_path)?;
     let sessions = store::list_sessions(&conn)?;
+
+    if json {
+        println!("{}", format_sessions_json(&sessions)?);
+        return Ok(());
+    }
 
     if sessions.is_empty() {
         println!("No Coven sessions yet. Create one with `coven run <harness> <prompt...>`.");
@@ -446,6 +455,47 @@ fn format_session_line(session: &store::SessionRecord) -> String {
     )
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionListJson<'a> {
+    sessions: Vec<SessionJson<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionJson<'a> {
+    id: &'a str,
+    project_root: &'a str,
+    harness: &'a str,
+    title: &'a str,
+    status: &'a str,
+    exit_code: Option<i32>,
+    created_at: &'a str,
+    updated_at: &'a str,
+}
+
+impl<'a> From<&'a store::SessionRecord> for SessionJson<'a> {
+    fn from(session: &'a store::SessionRecord) -> Self {
+        Self {
+            id: &session.id,
+            project_root: &session.project_root,
+            harness: &session.harness,
+            title: &session.title,
+            status: &session.status,
+            exit_code: session.exit_code,
+            created_at: &session.created_at,
+            updated_at: &session.updated_at,
+        }
+    }
+}
+
+fn format_sessions_json(sessions: &[store::SessionRecord]) -> Result<String> {
+    let output = SessionListJson {
+        sessions: sessions.iter().map(SessionJson::from).collect(),
+    };
+    serde_json::to_string(&output).context("failed to serialize sessions as JSON")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,6 +594,22 @@ mod tests {
     }
 
     #[test]
+    fn cli_sessions_accepts_json_flag() {
+        let plain = Cli::parse_from(["coven", "sessions"]);
+        let json = Cli::parse_from(["coven", "sessions", "--json"]);
+
+        match plain.command {
+            Command::Sessions { json } => assert!(!json),
+            other => panic!("expected sessions command, got {other:?}"),
+        }
+
+        match json.command {
+            Command::Sessions { json } => assert!(json),
+            other => panic!("expected sessions command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn printable_event_text_extracts_output_payload() {
         let event = store::EventRecord {
             id: "event-1".to_string(),
@@ -595,5 +661,39 @@ mod tests {
             format_session_line(&session),
             "session-id created codex A useful session"
         );
+    }
+
+    #[test]
+    fn format_sessions_json_prints_machine_readable_contract() -> Result<()> {
+        let session = store::SessionRecord {
+            id: "session-id".to_string(),
+            project_root: "/tmp/project".to_string(),
+            harness: "codex".to_string(),
+            title: "A useful session".to_string(),
+            status: "completed".to_string(),
+            exit_code: Some(0),
+            created_at: "2026-04-27T06:00:00Z".to_string(),
+            updated_at: "2026-04-27T06:01:00Z".to_string(),
+        };
+
+        let value: serde_json::Value = serde_json::from_str(&format_sessions_json(&[session])?)?;
+
+        assert_eq!(value["sessions"][0]["id"], "session-id");
+        assert_eq!(value["sessions"][0]["projectRoot"], "/tmp/project");
+        assert_eq!(value["sessions"][0]["harness"], "codex");
+        assert_eq!(value["sessions"][0]["title"], "A useful session");
+        assert_eq!(value["sessions"][0]["status"], "completed");
+        assert_eq!(value["sessions"][0]["exitCode"], 0);
+        assert_eq!(value["sessions"][0]["createdAt"], "2026-04-27T06:00:00Z");
+        assert_eq!(value["sessions"][0]["updatedAt"], "2026-04-27T06:01:00Z");
+        Ok(())
+    }
+
+    #[test]
+    fn format_sessions_json_wraps_empty_sessions() -> Result<()> {
+        let value: serde_json::Value = serde_json::from_str(&format_sessions_json(&[])?)?;
+
+        assert_eq!(value["sessions"].as_array().map(Vec::len), Some(0));
+        Ok(())
     }
 }

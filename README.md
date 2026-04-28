@@ -49,10 +49,11 @@ coven daemon start
 coven run codex "fix the failing tests"
 coven run claude "polish this UI"
 coven sessions
+coven sessions --json
 coven attach <session-id>
 ```
 
-`coven doctor` checks whether supported local harness CLIs are available. `coven run` creates a project-scoped session record, validates the working directory, and launches the selected harness through Coven-managed PTY execution.
+`coven doctor` checks whether supported local harness CLIs are available. `coven run` creates a project-scoped session record, validates the working directory, and launches the selected harness through Coven-managed PTY execution. `coven sessions --json` prints the same session history as a small machine-readable contract for local clients.
 
 ## What it does
 
@@ -79,7 +80,16 @@ Coven is the local harness substrate for OpenCoven. It does not replace your cod
 | `coven run <harness> <prompt> --cwd <path>` | Launch from a cwd inside the project root |
 | `coven run <harness> <prompt> --title <title>` | Set a readable session title |
 | `coven sessions` | List known sessions |
+| `coven sessions --json` | List known sessions as `{ "sessions": [...] }` JSON with camelCase fields |
 | `coven attach <session-id>` | Replay/follow session output and forward input |
+
+### Session JSON contract
+
+`coven sessions --json` is intended for tools like comux that want a CLI-only session listing without scraping human output:
+
+```json
+{"sessions":[{"id":"...","projectRoot":"/path/to/project","harness":"codex","title":"fix tests","status":"running","exitCode":null,"createdAt":"2026-04-28T12:00:00Z","updatedAt":"2026-04-28T12:00:01Z"}]}
+```
 
 ## Local API
 

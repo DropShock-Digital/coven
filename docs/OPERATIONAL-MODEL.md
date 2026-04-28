@@ -33,6 +33,7 @@ The Rust CLI/daemon should stay narrow and boring:
 - `coven doctor` detects supported local harnesses.
 - `coven run` and `POST /sessions` launch only known harness ids.
 - `coven attach` replays and follows Coven-managed event output.
+- `coven sessions --json` exposes a compact `{ "sessions": [...] }` CLI contract with camelCase fields for clients that cannot or should not speak directly to the daemon socket.
 - `coven daemon start/status/stop` manages one local daemon state directory.
 - The daemon exposes a small local API over `<covenHome>/coven.sock`.
 - SQLite stores session metadata and append-only event history.
@@ -51,7 +52,7 @@ The local API should remain stable and intentionally small:
 
 ### comux
 
-comux is a cockpit client. It may list, launch, open, and attach to Coven sessions through the local API, but it should not become the harness runtime.
+comux is a cockpit client. It may list, launch, open, and attach to Coven sessions through the local API, or use `coven sessions --json` for read-only CLI discovery, but it should not become the harness runtime.
 
 ### OpenClaw
 
