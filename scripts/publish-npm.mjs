@@ -41,9 +41,7 @@ function main() {
   }
 
   validatePublishVersion(version, dryRun);
-  if (!dryRun && process.env.NPM_TOKEN === undefined) {
-    fail('Refusing real npm publish without NPM_TOKEN. Prefer --dry-run until Val manually approves publishing.');
-  }
+  validatePublishToken(process.env, dryRun);
 
   if (!skipBuild) {
     run('cargo', ['build', '--release', '--target', target.rustTarget]);
@@ -151,6 +149,12 @@ export function validatePublishVersion(version, dryRun) {
   }
 }
 
+export function validatePublishToken(env, dryRun) {
+  if (!dryRun && !env.NPM_TOKEN && !env.NODE_AUTH_TOKEN) {
+    throw new Error('Refusing real npm publish without NPM_TOKEN or NODE_AUTH_TOKEN. Set one of these to authenticate with the npm registry.');
+  }
+}
+
 function wrapperPackageVersion() {
   const wrapperPackage = JSON.parse(readFileSync(path.join(repoRoot, 'npm', 'coven', 'package.json'), 'utf8'));
   return wrapperPackage.version;
@@ -172,13 +176,15 @@ function run(command, args, options = {}) {
   }
 }
 
-function publishEnv(dryRun) {
+export function publishEnv(dryRun, env = process.env) {
   if (dryRun) {
-    return process.env;
+    return env;
   }
+
+  const authToken = env.NPM_TOKEN || env.NODE_AUTH_TOKEN;
   return {
-    ...process.env,
-    NODE_AUTH_TOKEN: process.env.NPM_TOKEN
+    ...env,
+    NODE_AUTH_TOKEN: authToken
   };
 }
 
