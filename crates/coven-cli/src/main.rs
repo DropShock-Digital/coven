@@ -167,7 +167,7 @@ fn run_patch_openclaw(
         None => prompt_for_required_line("What is broken in OpenClaw? ")?,
     };
     let harness_id = match harness {
-        Some(harness) => harness,
+        Some(harness) => patch::HarnessId::parse(&harness)?,
         None if non_interactive => anyhow::bail!("--harness is required with --non-interactive"),
         None => choose_default_harness()?,
     };
@@ -272,19 +272,19 @@ fn confirm_yes(prompt: &str) -> Result<bool> {
     Ok(matches!(line.trim(), "y" | "Y" | "yes" | "YES" | "Yes"))
 }
 
-fn choose_default_harness() -> Result<String> {
+fn choose_default_harness() -> Result<patch::HarnessId> {
     let harnesses = harness::built_in_harnesses();
     if harnesses.iter().any(|h| h.id == "codex" && h.available) {
-        return Ok("codex".to_string());
+        return Ok(patch::HarnessId::Codex);
     }
     if harnesses.iter().any(|h| h.id == "claude" && h.available) {
-        return Ok("claude".to_string());
+        return Ok(patch::HarnessId::ClaudeCode);
     }
     anyhow::bail!("no supported harness is available; run `coven doctor` for setup guidance")
 }
 
 fn launch_patch_session(request: &patch::PatchOpenClawRequest) -> Result<String> {
-    let selected_harness = selected_available_harness(&request.harness_id)?;
+    let selected_harness = selected_available_harness(request.harness_id.as_str())?;
     let store_path = coven_store_path()?;
     let conn = store::open_store(&store_path)?;
     let now = current_timestamp();
@@ -308,7 +308,7 @@ fn launch_patch_session(request: &patch::PatchOpenClawRequest) -> Result<String>
             "patchTarget": "openclaw",
             "repoRoot": request.repo.root,
             "issue": request.issue,
-            "harnessId": request.harness_id,
+            "harnessId": request.harness_id.as_str(),
             "verificationProfile": request.verification_profile.as_str(),
             "status": "running"
         }),
