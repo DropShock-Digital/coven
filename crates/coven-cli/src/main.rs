@@ -174,9 +174,9 @@ const ROSE: &str = "\x1b[38;5;218m";
 const MOON: &str = "\x1b[38;5;117m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
-const MAGICAL_TUI_DEFAULT_INNER_WIDTH: usize = 74;
-const MAGICAL_TUI_MAX_INNER_WIDTH: usize = 88;
-const MAGICAL_TUI_MIN_INNER_WIDTH: usize = 42;
+const MAGICAL_TUI_DEFAULT_INNER_WIDTH: usize = 56;
+const MAGICAL_TUI_MAX_INNER_WIDTH: usize = 58;
+const MAGICAL_TUI_MIN_INNER_WIDTH: usize = 32;
 
 fn magical_tui_items() -> &'static [MagicalTuiItem] {
     &[
@@ -342,107 +342,72 @@ fn render_magical_tui_frame_with_color_and_width(
     let dim = ansi(color_enabled, DIM);
     let reset = ansi(color_enabled, RESET);
     let mut frame = String::new();
-    frame.push_str(&magical_tui_border('╭', '╮', purple, reset, inner_width));
-    frame.push_str(&magical_tui_centered_row(
-        "✦ Coven /command",
+    frame.push_str(&magical_tui_line(
+        "* Coven /command",
         gold,
-        purple,
         reset,
         inner_width,
     ));
-    frame.push_str(&magical_tui_centered_row(
-        "Project-scoped agent sessions with a little moonlight",
+    frame.push_str(&magical_tui_line(
+        "Project-scoped agent sessions",
         rose,
-        purple,
         reset,
         inner_width,
     ));
-    frame.push_str(&magical_tui_row(
-        "  /  Type a number or choose a spell. Nothing runs until Enter.",
+    frame.push_str(&magical_tui_line(
+        "Pick a command. Enter to cast.",
         moon,
-        purple,
         reset,
         inner_width,
     ));
-    frame.push_str(&magical_tui_border('├', '┤', purple, reset, inner_width));
-    frame.push_str(&magical_tui_row(
-        "Commands",
-        gold,
-        purple,
-        reset,
-        inner_width,
-    ));
-    frame.push_str(&magical_tui_row(
-        "↑/↓ or j/k move · 1-5 jump · Enter cast · q/Esc vanish",
+    frame.push('\n');
+    frame.push_str(&magical_tui_line("Commands", gold, reset, inner_width));
+    frame.push_str(&magical_tui_line(
+        "Up/Down or j/k - Enter - q/Esc",
         dim,
-        purple,
         reset,
         inner_width,
     ));
-    frame.push_str(&magical_tui_border('├', '┤', purple, reset, inner_width));
+    frame.push('\n');
 
     for (index, item) in magical_tui_items().iter().enumerate() {
-        let pointer = if index == selection { "▸" } else { " " };
+        let pointer = if index == selection { ">" } else { " " };
         let content = magical_tui_command_row(pointer, item, inner_width);
         let color = if index == selection { gold } else { purple };
-        frame.push_str(&magical_tui_row(
-            &content,
-            color,
-            purple,
-            reset,
-            inner_width,
-        ));
+        frame.push_str(&magical_tui_line(&content, color, reset, inner_width));
     }
 
     let selected = magical_tui_items()[selection.min(magical_tui_items().len() - 1)];
-    frame.push_str(&magical_tui_border('├', '┤', purple, reset, inner_width));
-    frame.push_str(&magical_tui_row(
-        "Preview",
-        gold,
-        purple,
-        reset,
-        inner_width,
-    ));
-    frame.push_str(&magical_tui_row(
+    frame.push('\n');
+    frame.push_str(&magical_tui_line("Preview", gold, reset, inner_width));
+    frame.push_str(&magical_tui_line(
         selected.description,
         moon,
-        purple,
         reset,
         inner_width,
     ));
-    frame.push_str(&magical_tui_row(
+    frame.push_str(&magical_tui_line(
         &format!("{} → {}", selected.slash, selected.command),
         gold,
-        purple,
         reset,
         inner_width,
     ));
-    frame.push_str(&magical_tui_row(
-        "Store: ~/.coven by default · set COVEN_HOME to move the altar",
+    frame.push_str(&magical_tui_line(
+        "Store: ~/.coven or COVEN_HOME",
         dim,
-        purple,
         reset,
         inner_width,
     ));
-
-    frame.push_str(&magical_tui_border('╰', '╯', purple, reset, inner_width));
     frame
 }
 
+fn magical_tui_line(content: &str, text_color: &str, reset: &str, inner_width: usize) -> String {
+    format!("{text_color}{}{reset}\n", fit_chars(content, inner_width))
+}
+
 fn magical_tui_command_row(pointer: &str, item: &MagicalTuiItem, inner_width: usize) -> String {
-    if inner_width >= 70 {
-        format!(
-            "{pointer} [{}] {:<10} {:<15} {}",
-            item.key, item.slash, item.label, item.description
-        )
-    } else if inner_width >= 52 {
-        format!(
-            "{pointer} {:<10} {:<15} {}",
-            item.slash, item.label, item.description
-        )
-    } else {
-        format!("{pointer} {:<10} {}", item.slash, item.label)
-    }
+    let row = format!("{pointer} {:<10} {}", item.slash, item.label);
+    fit_chars(&row, inner_width)
 }
 
 fn magical_tui_inner_width() -> usize {
@@ -462,62 +427,6 @@ fn magical_tui_inner_width_for_columns(columns: usize) -> usize {
 
 fn normalized_magical_tui_inner_width(inner_width: usize) -> usize {
     inner_width.clamp(24, MAGICAL_TUI_MAX_INNER_WIDTH)
-}
-
-fn magical_tui_border(
-    left: char,
-    right: char,
-    color: &str,
-    reset: &str,
-    inner_width: usize,
-) -> String {
-    format!("{color}{left}{}{right}{reset}\n", "─".repeat(inner_width))
-}
-
-fn magical_tui_centered_row(
-    content: &str,
-    text_color: &str,
-    border_color: &str,
-    reset: &str,
-    inner_width: usize,
-) -> String {
-    let content = fit_chars(content, inner_width);
-    let content_width = content.chars().count();
-    let padding = magical_tui_padding(content_width, inner_width);
-    let left = padding / 2;
-    let right = padding - left;
-    magical_tui_row(
-        &format!("{}{}{}", " ".repeat(left), content, " ".repeat(right)),
-        text_color,
-        border_color,
-        reset,
-        inner_width,
-    )
-}
-
-fn magical_tui_row(
-    content: &str,
-    text_color: &str,
-    border_color: &str,
-    reset: &str,
-    inner_width: usize,
-) -> String {
-    let content = fit_chars(content, inner_width);
-    let content_width = content.chars().count();
-    let padding = magical_tui_padding(content_width, inner_width);
-    format!(
-        "{border_color}│{reset}{text_color}{content}{}{reset}{border_color}│{reset}\n",
-        " ".repeat(padding)
-    )
-}
-
-#[allow(clippy::implicit_saturating_sub)]
-fn magical_tui_padding(content_width: usize, inner_width: usize) -> usize {
-    if content_width >= inner_width {
-        0
-    } else {
-        inner_width - content_width
-    }
 }
 
 fn fit_chars(value: &str, limit: usize) -> String {
@@ -1355,7 +1264,7 @@ mod tests {
         assert!(frame.contains("Run an agent"));
         assert!(frame.contains("Patch OpenClaw"));
         assert!(frame.contains("Doctor"));
-        assert!(frame.contains("▸"));
+        assert!(frame.contains(">"));
     }
 
     #[test]
@@ -1385,7 +1294,7 @@ mod tests {
         let frame = render_magical_tui_frame_plain(1);
 
         assert!(frame.contains("Project-scoped agent sessions"));
-        assert!(frame.contains("Nothing runs until Enter"));
+        assert!(frame.contains("Enter to cast"));
         assert!(frame.contains("Commands"));
         assert!(frame.contains("Launch Codex or Claude Code"));
         assert!(frame.contains("coven run codex"));
@@ -1397,7 +1306,10 @@ mod tests {
             magical_tui_inner_width_for_columns(120),
             MAGICAL_TUI_MAX_INNER_WIDTH
         );
-        assert_eq!(magical_tui_inner_width_for_columns(80), 78);
+        assert_eq!(
+            magical_tui_inner_width_for_columns(80),
+            MAGICAL_TUI_MAX_INNER_WIDTH
+        );
         assert_eq!(magical_tui_inner_width_for_columns(36), 34);
     }
 
