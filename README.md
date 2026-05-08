@@ -61,12 +61,11 @@ coven daemon start
 coven run codex "fix the failing tests"
 coven run claude "polish this UI"
 coven sessions
-coven summon <session-id>
-coven archive <session-id>
-coven attach <session-id>
+coven sessions --all
+coven sessions --plain
 ```
 
-`coven doctor` checks whether supported local harness CLIs are available. `coven run` creates a project-scoped session record, validates the working directory, and launches the selected harness through Coven-managed PTY execution.
+`coven doctor` checks whether supported local harness CLIs are available. `coven run` creates a project-scoped session record, validates the working directory, and launches the selected harness through Coven-managed PTY execution. In a terminal, `coven sessions` opens a human session browser where you can select work and choose actions without copying IDs; use `--plain` for scripts or table output.
 
 Coven also provides a rescue loop for OpenClaw contributors and users:
 
@@ -102,8 +101,10 @@ Coven is the local harness substrate for OpenCoven. It does not replace your cod
 | `coven run <harness> <prompt>` | Launch a project-scoped harness session |
 | `coven run <harness> <prompt> --cwd <path>` | Launch from a cwd inside the project root |
 | `coven run <harness> <prompt> --title <title>` | Set a readable session title |
-| `coven sessions` | List active sessions |
-| `coven sessions --all` | List active and archived sessions |
+| `coven sessions` | Open the active session browser in a terminal; print a table when piped |
+| `coven sessions --all` | Browse active and archived sessions in a terminal; print all when piped |
+| `coven sessions --manage` | Force the interactive session browser |
+| `coven sessions --plain` | Force plain table output for scripts/copying |
 | `coven attach <session-id>` | Replay/follow session output and forward input |
 | `coven summon <session-id>` | Restore an archived session, then replay/follow it |
 | `coven archive <session-id>` | Hide a non-running session from the active list while preserving events |

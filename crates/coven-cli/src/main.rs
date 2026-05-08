@@ -72,6 +72,10 @@ enum Command {
     Sessions {
         #[arg(long, help = "Include archived sessions")]
         all: bool,
+        #[arg(long, help = "Open the interactive session action browser")]
+        manage: bool,
+        #[arg(long, help = "Print a plain table instead of the session browser")]
+        plain: bool,
     },
     #[command(about = "Replay/follow a session and forward input to live daemon sessions")]
     Attach { session_id: String },
@@ -136,7 +140,7 @@ fn main() -> Result<()> {
             title,
             detach,
         }) => run_session(&harness, &prompt, cwd.as_deref(), title.as_deref(), detach),
-        Some(Command::Sessions { all }) => list_sessions(all),
+        Some(Command::Sessions { all, manage, plain }) => run_sessions_command(all, manage, plain),
         Some(Command::Attach { session_id }) => attach_session(&session_id),
         Some(Command::Summon { session_id }) => summon_session_command(&session_id),
         Some(Command::Archive { session_id }) => archive_session_command(&session_id),
@@ -183,6 +187,12 @@ enum SessionBrowserActionKind {
     Archive,
     Sacrifice,
     Back,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SessionsCommandMode {
+    Browser,
+    List,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -270,7 +280,7 @@ fn magical_tui_items() -> &'static [MagicalTuiItem] {
             slash: "/sessions",
             label: "Active sessions",
             description: "List live, non-archived Coven sessions",
-            command: "coven sessions",
+            command: "coven sessions --manage",
             action: MagicalTuiAction::Sessions,
         },
         MagicalTuiItem {
@@ -278,7 +288,7 @@ fn magical_tui_items() -> &'static [MagicalTuiItem] {
             slash: "/all",
             label: "All sessions",
             description: "List active and archived sessions together",
-            command: "coven sessions --all",
+            command: "coven sessions --all --manage",
             action: MagicalTuiAction::AllSessions,
         },
         MagicalTuiItem {
@@ -414,6 +424,33 @@ fn run_guided_harness_session() -> Result<()> {
     let prompt = prompt_for_required_line("Task for the agent: ")?;
     let title = prompt_for_optional_line("Optional session title [enter to skip]: ")?;
     run_session(&harness, &[prompt], None, title.as_deref(), false)
+}
+
+fn run_sessions_command(include_archived: bool, manage: bool, plain: bool) -> Result<()> {
+    match sessions_command_mode(
+        io::stdin().is_terminal(),
+        io::stdout().is_terminal(),
+        manage,
+        plain,
+    ) {
+        SessionsCommandMode::Browser => run_session_browser(include_archived),
+        SessionsCommandMode::List => list_sessions(include_archived),
+    }
+}
+
+fn sessions_command_mode(
+    stdin_terminal: bool,
+    stdout_terminal: bool,
+    manage: bool,
+    plain: bool,
+) -> SessionsCommandMode {
+    if plain {
+        SessionsCommandMode::List
+    } else if manage || (stdin_terminal && stdout_terminal) {
+        SessionsCommandMode::Browser
+    } else {
+        SessionsCommandMode::List
+    }
 }
 
 fn run_session_browser(include_archived: bool) -> Result<()> {
@@ -588,10 +625,20 @@ fn run_session_browser_action(
 }
 
 fn session_browser_actions(session: &store::SessionRecord) -> Vec<SessionBrowserAction> {
+    let attach_label = if session.status == RUNNING_SESSION_STATUS {
+        "Rejoin"
+    } else {
+        "View Log"
+    };
+    let attach_help = if session.status == RUNNING_SESSION_STATUS {
+        "Follow live output and send input"
+    } else {
+        "Replay captured output"
+    };
     let mut actions = vec![SessionBrowserAction {
         key: "a",
-        label: "Attach",
-        help: "Replay/follow this session",
+        label: attach_label,
+        help: attach_help,
         kind: SessionBrowserActionKind::Attach,
     }];
 
@@ -1886,7 +1933,20 @@ mod tests {
     fn cli_accepts_coven_session_ritual_verbs() {
         let sessions = Cli::parse_from(["coven", "sessions", "--all"]);
         match sessions.command {
-            Some(Command::Sessions { all }) => assert!(all),
+            Some(Command::Sessions { all, manage, plain }) => {
+                assert!(all);
+                assert!(!manage);
+                assert!(!plain);
+            }
+            other => panic!("expected sessions command, got {other:?}"),
+        }
+
+        let managed = Cli::parse_from(["coven", "sessions", "--manage", "--plain"]);
+        match managed.command {
+            Some(Command::Sessions { manage, plain, .. }) => {
+                assert!(manage);
+                assert!(plain);
+            }
             other => panic!("expected sessions command, got {other:?}"),
         }
 
@@ -1910,6 +1970,26 @@ mod tests {
             }
             other => panic!("expected sacrifice command, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn sessions_command_opens_browser_for_humans_and_plain_tables_for_scripts() {
+        assert_eq!(
+            sessions_command_mode(true, true, false, false),
+            SessionsCommandMode::Browser
+        );
+        assert_eq!(
+            sessions_command_mode(false, true, false, false),
+            SessionsCommandMode::List
+        );
+        assert_eq!(
+            sessions_command_mode(false, false, true, false),
+            SessionsCommandMode::Browser
+        );
+        assert_eq!(
+            sessions_command_mode(true, true, true, true),
+            SessionsCommandMode::List
+        );
     }
 
     #[test]
@@ -2077,7 +2157,7 @@ mod tests {
         assert!(frame.contains("completed"));
         assert!(frame.contains("codex"));
         assert!(frame.contains("Actions"));
-        assert!(frame.contains("Attach"));
+        assert!(frame.contains("View Log"));
         assert!(frame.contains("Archive"));
         assert!(frame.contains("Sacrifice"));
         assert!(frame.contains("session-alpha"));
@@ -2098,6 +2178,27 @@ mod tests {
 
         assert!(actions.iter().any(|action| action.label == "Summon"));
         assert!(!actions.iter().any(|action| action.label == "Archive"));
+    }
+
+    #[test]
+    fn session_browser_primary_action_uses_human_labels() {
+        let running = test_session_record(
+            "running-session-123",
+            RUNNING_SESSION_STATUS,
+            "codex",
+            "Live agent",
+            None,
+        );
+        let completed = test_session_record(
+            "completed-session-123",
+            "completed",
+            "codex",
+            "Past agent",
+            None,
+        );
+
+        assert_eq!(session_browser_actions(&running)[0].label, "Rejoin");
+        assert_eq!(session_browser_actions(&completed)[0].label, "View Log");
     }
 
     #[test]

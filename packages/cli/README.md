@@ -27,11 +27,14 @@ coven run codex "fix tests"
 coven run claude "polish this UI"
 coven sessions
 coven sessions --all
+coven sessions --plain
 coven attach <session-id>
 coven summon <session-id>
 coven archive <session-id>
 coven sacrifice <session-id> --yes
 ```
+
+In a terminal, `coven sessions` opens the human session browser so you can select work and choose Attach/Summon/Archive/Sacrifice without copying IDs. Use `coven sessions --plain` for scripts or table output.
 
 Session rituals use Coven language while staying safe: archive hides old work without deleting it, summon restores archived work, and sacrifice permanently deletes only after explicit `--yes` confirmation.
 
