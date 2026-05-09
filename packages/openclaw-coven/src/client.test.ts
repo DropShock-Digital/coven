@@ -9,6 +9,7 @@ let tmpDir: string;
 
 beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-coven-client-"));
+  await fs.chmod(tmpDir, 0o700);
 });
 
 afterEach(async () => {
@@ -25,6 +26,7 @@ async function withServer(
     server.once("error", reject);
     server.listen(socketPath, () => resolve());
   });
+  await fs.chmod(socketPath, 0o600);
   try {
     await fn(socketPath);
   } finally {
