@@ -9,9 +9,9 @@
  *   - Plugin:  @opencoven/coven 2026.4.28
  *   - Daemon:  Coven (coven-cli) built from the same repo at 2026.4.x
  *
- * When the Rust daemon changes a response shape for /health, /sessions, or
- * /events, update the matching fixture file and re-run these tests to confirm
- * the plugin handles the new shape correctly.
+ * When the Rust daemon changes a response shape for /health, /sessions, /events,
+ * input, or kill behavior, update the matching fixture file and re-run these
+ * tests to confirm the plugin handles the new shape correctly.
  */
 
 import fs from "node:fs/promises";
@@ -244,6 +244,58 @@ describe("Coven daemon API compatibility — v2026.4", () => {
         },
       );
     });
+
+    it("accepts a 202 response from sendInput and forwards the data field", async () => {
+      let capturedBody = "";
+      await withServer(
+        (req, res) => {
+          // Verify the client posts to the correct input path
+          expect(req.url).toBe(
+            "/sessions/550e8400-e29b-41d4-a716-446655440001/input",
+          );
+          let body = "";
+          req.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          req.on("end", () => {
+            capturedBody = body;
+            res.statusCode = 202;
+            res.setHeader("Content-Type", "application/json");
+            res.end(JSON.stringify({ ok: true, accepted: true }));
+          });
+        },
+        async (socketPath) => {
+          await expect(
+            createCovenClient(socketPath).sendInput(
+              "550e8400-e29b-41d4-a716-446655440001",
+              "fix the test\n",
+            ),
+          ).resolves.toBeUndefined();
+          expect(JSON.parse(capturedBody)).toEqual({ data: "fix the test\n" });
+        },
+      );
+    });
+
+    it("accepts a 202 response from killSession", async () => {
+      await withServer(
+        (req, res) => {
+          // Verify the client posts to the correct kill path
+          expect(req.url).toBe(
+            "/sessions/550e8400-e29b-41d4-a716-446655440001/kill",
+          );
+          res.statusCode = 202;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ ok: true, accepted: true }));
+        },
+        async (socketPath) => {
+          await expect(
+            createCovenClient(socketPath).killSession(
+              "550e8400-e29b-41d4-a716-446655440001",
+            ),
+          ).resolves.toBeUndefined();
+        },
+      );
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -379,6 +431,85 @@ describe("Coven daemon API compatibility — v2026.4", () => {
         async (socketPath) => {
           await expect(
             createCovenClient(socketPath).health(),
+          ).rejects.toBeInstanceOf(CovenApiError);
+        },
+      );
+    });
+
+    it("throws a CovenApiError when sendInput receives a 404 (session not found)", async () => {
+      // The daemon returns 404 when the session id does not exist.
+      await withServer(
+        (_req, res) => {
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "session not found" }));
+        },
+        async (socketPath) => {
+          await expect(
+            createCovenClient(socketPath).sendInput("no-such-session", "hello\n"),
+          ).rejects.toBeInstanceOf(CovenApiError);
+        },
+      );
+    });
+
+    it("throws a CovenApiError when sendInput receives a 409 (session not live)", async () => {
+      // The daemon returns 409 when the session exists but is no longer running
+      // (completed, killed, or failed). The plugin must not swallow this error.
+      await withServer(
+        (_req, res) => {
+          res.statusCode = 409;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              error: "session not live",
+              sessionId: "550e8400-e29b-41d4-a716-446655440000",
+            }),
+          );
+        },
+        async (socketPath) => {
+          await expect(
+            createCovenClient(socketPath).sendInput(
+              "550e8400-e29b-41d4-a716-446655440000",
+              "too late\n",
+            ),
+          ).rejects.toBeInstanceOf(CovenApiError);
+        },
+      );
+    });
+
+    it("throws a CovenApiError when killSession receives a 404 (session not found)", async () => {
+      await withServer(
+        (_req, res) => {
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "application/json");
+          res.end(JSON.stringify({ error: "session not found" }));
+        },
+        async (socketPath) => {
+          await expect(
+            createCovenClient(socketPath).killSession("no-such-session"),
+          ).rejects.toBeInstanceOf(CovenApiError);
+        },
+      );
+    });
+
+    it("throws a CovenApiError when killSession receives a 409 (session not live)", async () => {
+      // The daemon returns 409 when the session is already completed/killed.
+      await withServer(
+        (_req, res) => {
+          res.statusCode = 409;
+          res.setHeader("Content-Type", "application/json");
+          res.end(
+            JSON.stringify({
+              error: "session not live",
+              sessionId: "550e8400-e29b-41d4-a716-446655440000",
+            }),
+          );
+        },
+        async (socketPath) => {
+          await expect(
+            createCovenClient(socketPath).killSession(
+              "550e8400-e29b-41d4-a716-446655440000",
+            ),
           ).rejects.toBeInstanceOf(CovenApiError);
         },
       );
