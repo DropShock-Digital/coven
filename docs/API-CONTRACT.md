@@ -65,6 +65,39 @@ Endpoints that return this shape:
 ]
 ```
 
+## Live control response shapes (`v1`)
+
+Both live-control endpoints return the same accepted response shape on success:
+
+- `POST /sessions/:id/input`
+- `POST /sessions/:id/kill`
+
+```json
+{
+  "ok": true,
+  "accepted": true
+}
+```
+
+Shared non-success responses:
+
+- `404` when the session does not exist:
+
+```json
+{
+  "error": "session not found"
+}
+```
+
+- `409` when the session exists but is not live:
+
+```json
+{
+  "error": "session not live",
+  "sessionId": "session-1"
+}
+```
+
 ## Compatibility and migration policy
 
 - `v1` clients may rely on the documented field names and top-level response shapes above.

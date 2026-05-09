@@ -39,11 +39,12 @@ describe("createCovenClient", () => {
     await withServer(
       (_req, res) => {
         res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ ok: true, daemon: null }));
+        res.end(JSON.stringify({ ok: true, apiVersion: "v1", daemon: null }));
       },
       async (socketPath) => {
         await expect(createCovenClient(socketPath).health()).resolves.toEqual({
           ok: true,
+          apiVersion: "v1",
           daemon: null,
         });
       },
@@ -54,13 +55,14 @@ describe("createCovenClient", () => {
     await withServer(
       (_req, res) => {
         res.setHeader("Content-Type", "application/json");
-        res.end(JSON.stringify({ ok: true, daemon: null }));
+        res.end(JSON.stringify({ ok: true, apiVersion: "v1", daemon: null }));
       },
       async (socketPath) => {
         await expect(
           createCovenClient(socketPath, { socketRoot: tmpDir }).health(),
         ).resolves.toEqual({
           ok: true,
+          apiVersion: "v1",
           daemon: null,
         });
       },

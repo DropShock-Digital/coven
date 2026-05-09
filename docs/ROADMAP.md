@@ -62,7 +62,7 @@ Now:
 
 Next:
 
-- Stabilize a named Coven API version for comux and other local clients.
+- Add compatibility tests that pin the shipped `v1` contract for comux and other local clients.
 - Add stronger real-world smoke tests for daemon restart, attach, kill, archive, summon, and sacrifice flows.
 - Improve install verification across macOS and Linux package paths.
 - Turn the MVP checklist into linked GitHub issues/milestones.
