@@ -55,7 +55,7 @@ Shipped:
 
 Now:
 
-- Harden the daemon API as a versioned public contract.
+- Keep the versioned daemon API contract and external-client compatibility work aligned. See [`docs/API-CONTRACT.md`](API-CONTRACT.md).
 - Add compatibility tests for the external OpenClaw plugin against versioned daemon responses.
 - Improve first-run onboarding and failure recovery for missing harness CLIs.
 - Keep the public docs aligned with the actual CLI/API surface.
@@ -155,7 +155,7 @@ Status: **mostly shipped**
 - [x] SQLite session/event ledger
 - [x] Daemon lifecycle
 - [x] Local sessions/events API
-- [ ] Versioned API contract
+- [x] Versioned API contract
 - [ ] Compatibility tests for external clients
 
 ### Milestone B — Visible cockpit foundation
