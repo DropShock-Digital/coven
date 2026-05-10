@@ -96,6 +96,13 @@ pub fn capabilities() -> CapabilityCatalog {
 }
 
 pub fn route_action(payload: Value) -> (u16, ControlActionResponse) {
+    if !payload.is_object() {
+        return (
+            400,
+            rejected_action("(unknown)", "request body must be a JSON object"),
+        );
+    }
+
     let Some(action) = payload
         .get("action")
         .and_then(Value::as_str)
@@ -133,7 +140,7 @@ pub fn route_action(payload: Value) -> (u16, ControlActionResponse) {
                 }),
             };
             (
-                202,
+                200,
                 ControlActionResponse {
                     ok: true,
                     accepted: true,

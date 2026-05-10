@@ -127,7 +127,7 @@ pub fn handle_request_with_runtime(
                 Err(error) => {
                     return json_response(
                         400,
-                        &control_plane::rejected_action("", error.to_string()),
+                        &control_plane::rejected_action("(unknown)", error.to_string()),
                     );
                 }
             };
@@ -475,7 +475,7 @@ mod tests {
             Some(&body),
         )?;
 
-        assert_eq!(response.status, 202);
+        assert_eq!(response.status, 200);
         assert!(response.body.contains(r#""accepted":true"#));
         assert!(response
             .body
@@ -526,13 +526,25 @@ mod tests {
             None,
             Some(r#"{"action":"   "}"#),
         )?;
+        let non_object = handle_request_with_body(
+            "POST",
+            "/api/v1/actions",
+            temp_dir.path(),
+            None,
+            Some(r#"["not","an","object"]"#),
+        )?;
 
         assert_eq!(malformed.status, 400);
         assert_eq!(missing.status, 400);
         assert_eq!(empty.status, 400);
+        assert_eq!(non_object.status, 400);
         assert!(malformed.body.contains(r#""accepted":false"#));
+        assert!(malformed.body.contains(r#""action":"(unknown)""#));
         assert!(missing.body.contains("request body requires string field"));
         assert!(empty.body.contains("request body requires string field"));
+        assert!(non_object
+            .body
+            .contains("request body must be a JSON object"));
         Ok(())
     }
 
