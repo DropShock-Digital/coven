@@ -10,7 +10,9 @@ use chrono::{SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
 use crossterm::{
     cursor::MoveTo,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, MouseEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
 };
@@ -153,6 +155,7 @@ fn main() -> Result<()> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MagicalTuiAction {
     StartHere,
+    Help,
     OpenTui,
     Doctor,
     DaemonStatus,
@@ -165,6 +168,17 @@ enum MagicalTuiAction {
     ArchiveSession,
     SacrificeSession,
     Quit,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum MagicalTuiRequest {
+    Action(MagicalTuiAction),
+    NaturalPrompt(String),
+    HarnessPrompt { harness: String, prompt: String },
+    AttachSession(String),
+    SummonSession(String),
+    ArchiveSession(String),
+    SacrificeSession(String),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -220,9 +234,9 @@ const ROSE: &str = "\x1b[38;5;218m";
 const MOON: &str = "\x1b[38;5;117m";
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
-const MAGICAL_TUI_DEFAULT_INNER_WIDTH: usize = 24;
-const MAGICAL_TUI_MAX_INNER_WIDTH: usize = 24;
-const MAGICAL_TUI_MIN_INNER_WIDTH: usize = 24;
+const MAGICAL_TUI_DEFAULT_INNER_WIDTH: usize = 76;
+const MAGICAL_TUI_MAX_INNER_WIDTH: usize = 96;
+const MAGICAL_TUI_MIN_INNER_WIDTH: usize = 40;
 const SESSION_BROWSER_FIRST_SESSION_ROW: usize = 5;
 const SESSION_BROWSER_MAX_VISIBLE_SESSIONS: usize = 8;
 
@@ -235,6 +249,14 @@ fn magical_tui_items() -> &'static [MagicalTuiItem] {
             description: "Setup check and a safe first command",
             command: "coven doctor",
             action: MagicalTuiAction::StartHere,
+        },
+        MagicalTuiItem {
+            key: "h",
+            slash: "/help",
+            label: "Help",
+            description: "Show natural-language and slash-command examples",
+            command: "type a task or /run codex <task>",
+            action: MagicalTuiAction::Help,
         },
         MagicalTuiItem {
             key: "0",
@@ -338,38 +360,48 @@ fn magical_tui_items() -> &'static [MagicalTuiItem] {
 fn run_magical_tui() -> Result<()> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         println!("{}", render_magical_tui_frame_plain(0));
-        println!(
-            "\nTip: run `coven doctor` first, then `coven run codex \"fix the failing tests\"`."
-        );
+        println!("\nTip: run `coven tui` in a terminal, type a task, then press Enter.");
         return Ok(());
     }
 
     let mut selection = 0;
+    let mut input = String::new();
     enable_raw_mode().context("failed to enter Coven's magical terminal mode")?;
-    let action = loop {
+    let request = loop {
         execute!(io::stdout(), Clear(ClearType::All), MoveTo(0, 0))
             .context("failed to redraw Coven menu")?;
-        print!("{}", render_magical_tui_frame_for_raw_terminal(selection));
+        print!(
+            "{}",
+            render_magical_tui_frame_for_raw_terminal(selection, &input)
+        );
         io::stdout().flush().context("failed to flush Coven menu")?;
 
         if let Event::Key(key) = event::read().context("failed to read Coven menu input")? {
             match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
+                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    break Ok(MagicalTuiRequest::Action(MagicalTuiAction::Quit));
+                }
+                KeyCode::Up => {
                     selection = move_magical_tui_selection(selection, MagicalTuiMove::Up);
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+                KeyCode::Down => {
                     selection = move_magical_tui_selection(selection, MagicalTuiMove::Down);
                 }
-                KeyCode::Enter => break magical_tui_items()[selection].action,
-                KeyCode::Char(value) => {
-                    if let Some(item) = magical_tui_items()
-                        .iter()
-                        .find(|item| item.key.chars().eq(std::iter::once(value)))
-                    {
-                        break item.action;
-                    }
+                KeyCode::Backspace => {
+                    input.pop();
                 }
-                KeyCode::Esc => break MagicalTuiAction::Quit,
+                KeyCode::Enter => {
+                    if input.trim().is_empty() {
+                        break Ok(MagicalTuiRequest::Action(
+                            magical_tui_items()[selection].action,
+                        ));
+                    }
+                    break parse_magical_tui_input(&input);
+                }
+                KeyCode::Char(value) => {
+                    input.push(value);
+                }
+                KeyCode::Esc => break Ok(MagicalTuiRequest::Action(MagicalTuiAction::Quit)),
                 _ => {}
             }
         }
@@ -377,12 +409,29 @@ fn run_magical_tui() -> Result<()> {
     disable_raw_mode().context("failed to leave Coven's magical terminal mode")?;
     println!();
 
-    run_magical_tui_action(action)
+    run_magical_tui_request(request?)
+}
+
+fn run_magical_tui_request(request: MagicalTuiRequest) -> Result<()> {
+    match request {
+        MagicalTuiRequest::Action(action) => run_magical_tui_action(action),
+        MagicalTuiRequest::NaturalPrompt(prompt) => run_default_prompt_session(&prompt),
+        MagicalTuiRequest::HarnessPrompt { harness, prompt } => {
+            run_session(&harness, &[prompt], None, None, false)
+        }
+        MagicalTuiRequest::AttachSession(session_id) => attach_session(&session_id),
+        MagicalTuiRequest::SummonSession(session_id) => summon_session_command(&session_id),
+        MagicalTuiRequest::ArchiveSession(session_id) => archive_session_command(&session_id),
+        MagicalTuiRequest::SacrificeSession(session_id) => {
+            sacrifice_session_command(&session_id, false)
+        }
+    }
 }
 
 fn run_magical_tui_action(action: MagicalTuiAction) -> Result<()> {
     match action {
         MagicalTuiAction::StartHere => run_new_user_start_here(),
+        MagicalTuiAction::Help => run_tui_help(),
         MagicalTuiAction::OpenTui => run_magical_tui(),
         MagicalTuiAction::Doctor => run_doctor(),
         MagicalTuiAction::DaemonStatus => run_daemon_command(DaemonCommand::Status),
@@ -401,6 +450,105 @@ fn run_magical_tui_action(action: MagicalTuiAction) -> Result<()> {
             Ok(())
         }
     }
+}
+
+fn parse_magical_tui_input(input: &str) -> Result<MagicalTuiRequest> {
+    let input = input.trim();
+    if input.is_empty() {
+        return Ok(MagicalTuiRequest::Action(MagicalTuiAction::OpenTui));
+    }
+    if !input.starts_with('/') {
+        return Ok(MagicalTuiRequest::NaturalPrompt(input.to_string()));
+    }
+
+    let (command, rest) = split_command(input);
+    match command {
+        "/start" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::StartHere)),
+        "/help" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::Help)),
+        "/tui" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::OpenTui)),
+        "/doctor" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::Doctor)),
+        "/daemon" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::DaemonStatus)),
+        "/patch" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::PatchOpenClaw)),
+        "/sessions" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::Sessions)),
+        "/all" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::AllSessions)),
+        "/run" => parse_run_slash_command(rest),
+        "/codex" => parse_harness_slash_command("codex", rest),
+        "/claude" => parse_harness_slash_command("claude", rest),
+        "/attach" => parse_session_slash_command(rest, MagicalTuiRequest::AttachSession),
+        "/summon" => parse_session_slash_command(rest, MagicalTuiRequest::SummonSession),
+        "/archive" => parse_session_slash_command(rest, MagicalTuiRequest::ArchiveSession),
+        "/sacrifice" => parse_session_slash_command(rest, MagicalTuiRequest::SacrificeSession),
+        "/quit" | "/exit" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::Quit)),
+        _ => anyhow::bail!(
+            "unknown Coven slash command `{command}`. Type `/help` to see available commands"
+        ),
+    }
+}
+
+fn split_command(input: &str) -> (&str, &str) {
+    if let Some(index) = input.find(char::is_whitespace) {
+        (&input[..index], input[index..].trim())
+    } else {
+        (input, "")
+    }
+}
+
+fn parse_run_slash_command(rest: &str) -> Result<MagicalTuiRequest> {
+    if rest.trim().is_empty() {
+        return Ok(MagicalTuiRequest::Action(MagicalTuiAction::RunHarness));
+    }
+    let (first, remaining) = split_command(rest);
+    if matches!(first, "codex" | "claude") {
+        if remaining.is_empty() {
+            anyhow::bail!("`/run {first}` needs a task, for example `/run {first} fix tests`");
+        }
+        return Ok(MagicalTuiRequest::HarnessPrompt {
+            harness: first.to_string(),
+            prompt: remaining.to_string(),
+        });
+    }
+    Ok(MagicalTuiRequest::NaturalPrompt(rest.trim().to_string()))
+}
+
+fn parse_harness_slash_command(harness: &str, rest: &str) -> Result<MagicalTuiRequest> {
+    let prompt = rest.trim();
+    if prompt.is_empty() {
+        anyhow::bail!("`/{harness}` needs a task, for example `/{harness} fix tests`");
+    }
+    Ok(MagicalTuiRequest::HarnessPrompt {
+        harness: harness.to_string(),
+        prompt: prompt.to_string(),
+    })
+}
+
+fn parse_session_slash_command(
+    rest: &str,
+    build: fn(String) -> MagicalTuiRequest,
+) -> Result<MagicalTuiRequest> {
+    let session_id = rest.trim();
+    if session_id.is_empty() {
+        anyhow::bail!("this slash command needs a session id");
+    }
+    Ok(build(session_id.to_string()))
+}
+
+fn run_default_prompt_session(prompt: &str) -> Result<()> {
+    let harness = default_harness_id()
+        .ok_or_else(|| anyhow!("no supported harness is available; run `coven doctor` first"))?;
+    run_session(harness, &[prompt.to_string()], None, None, false)
+}
+
+fn run_tui_help() -> Result<()> {
+    println!("{GOLD}Coven TUI{RESET}");
+    println!("Type a plain-language task and press Enter to launch your default harness.");
+    println!("Use slash commands when you want a specific route. Examples:");
+    println!("  fix the failing tests");
+    println!("  /run codex explain this repo");
+    println!("  /claude review the latest diff");
+    println!("  /sessions");
+    println!("  /attach <session-id>");
+    println!("  /doctor");
+    Ok(())
 }
 
 fn run_new_user_start_here() -> Result<()> {
@@ -833,25 +981,40 @@ fn session_browser_action_row_to_index(
     (index < action_count).then_some(index)
 }
 
-fn render_magical_tui_frame(selection: usize) -> String {
-    render_magical_tui_frame_with_color_and_width(selection, true, magical_tui_inner_width())
+fn render_magical_tui_frame(selection: usize, input: &str) -> String {
+    render_magical_tui_frame_with_color_and_width(selection, input, true, magical_tui_inner_width())
 }
 
-fn render_magical_tui_frame_for_raw_terminal(selection: usize) -> String {
-    render_magical_tui_frame(selection).replace('\n', "\r\n")
+fn render_magical_tui_frame_for_raw_terminal(selection: usize, input: &str) -> String {
+    render_magical_tui_frame(selection, input).replace('\n', "\r\n")
 }
 
 fn render_magical_tui_frame_plain(selection: usize) -> String {
-    render_magical_tui_frame_with_color_and_width(selection, false, MAGICAL_TUI_DEFAULT_INNER_WIDTH)
+    render_magical_tui_frame_with_color_and_width(
+        selection,
+        "",
+        false,
+        MAGICAL_TUI_DEFAULT_INNER_WIDTH,
+    )
 }
 
 #[cfg(test)]
 fn render_magical_tui_frame_plain_with_width(selection: usize, inner_width: usize) -> String {
-    render_magical_tui_frame_with_color_and_width(selection, false, inner_width)
+    render_magical_tui_frame_with_color_and_width(selection, "", false, inner_width)
+}
+
+#[cfg(test)]
+fn render_magical_tui_frame_plain_with_input(
+    selection: usize,
+    input: &str,
+    inner_width: usize,
+) -> String {
+    render_magical_tui_frame_with_color_and_width(selection, input, false, inner_width)
 }
 
 fn render_magical_tui_frame_with_color_and_width(
     selection: usize,
+    input: &str,
     color_enabled: bool,
     inner_width: usize,
 ) -> String {
@@ -863,34 +1026,45 @@ fn render_magical_tui_frame_with_color_and_width(
     let dim = ansi(color_enabled, DIM);
     let reset = ansi(color_enabled, RESET);
     let mut frame = String::new();
+    frame.push_str(&magical_tui_line("COVEN", gold, reset, inner_width));
     frame.push_str(&magical_tui_line(
-        "* Coven /command",
-        gold,
-        reset,
-        inner_width,
-    ));
-    frame.push_str(&magical_tui_line(
-        "Project sessions",
+        "Prompt-first agent console",
         rose,
         reset,
         inner_width,
     ));
     frame.push_str(&magical_tui_line(
-        "Pick one. Enter casts.",
+        "Type natural language, or use slash commands.",
         moon,
         reset,
         inner_width,
     ));
     frame.push('\n');
-    frame.push_str(&magical_tui_line("Commands", gold, reset, inner_width));
+    for line in magical_tui_graph_lines() {
+        frame.push_str(&magical_tui_line(line, purple, reset, inner_width));
+    }
+    frame.push('\n');
+    frame.push_str(&magical_tui_line("Input", gold, reset, inner_width));
     frame.push_str(&magical_tui_line(
-        "1-9/a/x/q + Enter",
+        &magical_tui_prompt_row(input, inner_width),
+        moon,
+        reset,
+        inner_width,
+    ));
+    frame.push_str(&magical_tui_line(
+        "Enter runs input. Empty Enter runs selected slash. Esc quits.",
         dim,
         reset,
         inner_width,
     ));
     frame.push('\n');
 
+    frame.push_str(&magical_tui_line(
+        "Slash commands",
+        gold,
+        reset,
+        inner_width,
+    ));
     for (index, item) in magical_tui_items().iter().enumerate() {
         let pointer = if index == selection { ">" } else { " " };
         let content = magical_tui_command_row(pointer, item, inner_width);
@@ -900,7 +1074,12 @@ fn render_magical_tui_frame_with_color_and_width(
 
     let selected = magical_tui_items()[selection.min(magical_tui_items().len() - 1)];
     frame.push('\n');
-    frame.push_str(&magical_tui_line("Preview", gold, reset, inner_width));
+    frame.push_str(&magical_tui_line(
+        "Selected slash",
+        gold,
+        reset,
+        inner_width,
+    ));
     frame.push_str(&magical_tui_line(
         selected.description,
         moon,
@@ -920,6 +1099,27 @@ fn render_magical_tui_frame_with_color_and_width(
         inner_width,
     ));
     frame
+}
+
+fn magical_tui_graph_lines() -> &'static [&'static str] {
+    &[
+        "        [nova]          [cody]",
+        "          |              |",
+        "          |              |",
+        " [memory] -- [coven] -- [sessions]",
+        "          |              |",
+        "          |              |",
+        "     [gateway]      [claude]",
+    ]
+}
+
+fn magical_tui_prompt_row(input: &str, inner_width: usize) -> String {
+    let value = if input.is_empty() {
+        "fix the failing tests  |  /run codex plan the refactor"
+    } else {
+        input
+    };
+    fit_chars(&format!("> {value}"), inner_width)
 }
 
 fn magical_tui_line(content: &str, text_color: &str, reset: &str, inner_width: usize) -> String {
@@ -1806,9 +2006,11 @@ mod tests {
     fn magical_tui_frame_uses_purple_gold_branding_and_lists_core_actions() {
         let frame = render_magical_tui_frame_plain(1);
 
-        assert!(frame.contains("Coven"));
-        assert!(frame.contains("/command"));
+        assert!(frame.contains("COVEN"));
+        assert!(frame.contains("Prompt-first agent console"));
+        assert!(frame.contains("[coven]"));
         assert!(frame.contains("/start"));
+        assert!(frame.contains("/help"));
         assert!(frame.contains("/run"));
         assert!(frame.contains("/patch"));
         assert!(frame.contains("/doctor"));
@@ -1826,6 +2028,7 @@ mod tests {
             slashes,
             vec![
                 "/start",
+                "/help",
                 "/tui",
                 "/doctor",
                 "/daemon",
@@ -1858,7 +2061,7 @@ mod tests {
     fn magical_tui_frame_previews_selected_spell_command() {
         let frame = render_magical_tui_frame_plain(0);
 
-        assert!(frame.contains("Preview"));
+        assert!(frame.contains("Selected slash"));
         assert!(frame.contains("/start"));
         assert!(frame.contains("coven doctor"));
         assert!(frame.contains("~/.coven"));
@@ -1866,13 +2069,28 @@ mod tests {
 
     #[test]
     fn magical_tui_frame_is_newcomer_friendly() {
-        let frame = render_magical_tui_frame_plain(4);
+        let frame = render_magical_tui_frame_plain(5);
 
-        assert!(frame.contains("Project sessions"));
-        assert!(frame.contains("Enter casts"));
-        assert!(frame.contains("Commands"));
+        assert!(frame.contains("Type natural language"));
+        assert!(frame.contains("Empty Enter runs selected slash"));
+        assert!(frame.contains("Slash commands"));
         assert!(frame.contains("Launch Codex"));
         assert!(frame.contains("coven run codex"));
+    }
+
+    #[test]
+    fn magical_tui_frame_renders_prompt_input() {
+        let frame = render_magical_tui_frame_plain_with_input(0, "summarize the repo", 76);
+
+        assert!(frame.contains("> summarize the repo"));
+    }
+
+    #[test]
+    fn magical_tui_frame_includes_obsidian_style_graph() {
+        let frame = render_magical_tui_frame_plain(0);
+
+        assert!(frame.contains("[memory] -- [coven] -- [sessions]"));
+        assert!(frame.contains("[gateway]"));
     }
 
     #[test]
@@ -1881,11 +2099,8 @@ mod tests {
             magical_tui_inner_width_for_columns(120),
             MAGICAL_TUI_MAX_INNER_WIDTH
         );
-        assert_eq!(
-            magical_tui_inner_width_for_columns(80),
-            MAGICAL_TUI_MAX_INNER_WIDTH
-        );
-        assert_eq!(magical_tui_inner_width_for_columns(36), 24);
+        assert_eq!(magical_tui_inner_width_for_columns(80), 78);
+        assert_eq!(magical_tui_inner_width_for_columns(36), 34);
     }
 
     #[test]
@@ -1904,10 +2119,47 @@ mod tests {
 
     #[test]
     fn magical_tui_raw_terminal_frame_uses_crlf_to_avoid_stair_step_rendering() {
-        let frame = render_magical_tui_frame_for_raw_terminal(0);
+        let frame = render_magical_tui_frame_for_raw_terminal(0, "");
 
         assert!(frame.contains("\r\n"));
         assert!(!frame.replace("\r\n", "").contains('\n'));
+    }
+
+    #[test]
+    fn magical_tui_input_routes_plain_language_to_default_prompt() -> Result<()> {
+        assert_eq!(
+            parse_magical_tui_input("fix the failing tests")?,
+            MagicalTuiRequest::NaturalPrompt("fix the failing tests".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn magical_tui_input_routes_harness_slash_commands() -> Result<()> {
+        assert_eq!(
+            parse_magical_tui_input("/run codex explain this repo")?,
+            MagicalTuiRequest::HarnessPrompt {
+                harness: "codex".to_string(),
+                prompt: "explain this repo".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_magical_tui_input("/claude review the diff")?,
+            MagicalTuiRequest::HarnessPrompt {
+                harness: "claude".to_string(),
+                prompt: "review the diff".to_string(),
+            }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn magical_tui_input_routes_session_slash_commands() -> Result<()> {
+        assert_eq!(
+            parse_magical_tui_input("/attach abc123")?,
+            MagicalTuiRequest::AttachSession("abc123".to_string())
+        );
+        Ok(())
     }
 
     #[test]
