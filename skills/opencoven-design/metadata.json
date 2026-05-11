@@ -1,0 +1,17 @@
+{
+  "name": "OpenCoven Design System",
+  "description": "Opinionated design constraints for OpenCoven harness interfaces, cockpit UIs, and agent-built components",
+  "style": "Dark",
+  "accent": "Violet",
+  "grid": "4px",
+  "framework": "Lit/React",
+  "version": "1.0.0",
+  "author": "OpenCoven Team",
+  "license": "MIT",
+  "tags": ["design", "ui", "constraints", "dark-mode", "cockpit"],
+  "colors": {
+    "foundation": "black",
+    "accent": "violet",
+    "palette": "87-color semantic system"
+  }
+}

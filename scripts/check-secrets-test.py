@@ -20,6 +20,8 @@ class SecretGuardLockfileTests(unittest.TestCase):
                 "  '@smithy/util-defaults-mode-browser@4.3.49': {}",
                 "  '@mariozechner/clipboard-win32-arm64-msvc':",
                 "  '@mariozechner/clipboard-linux-riscv64-gnu': 0.3.2",
+                '    "node_modules/@rolldown/binding-win32-arm64-msvc": {',
+                '    "node_modules/lightningcss-win32-x64-msvc": {',
             ]
         )
 
@@ -29,9 +31,24 @@ class SecretGuardLockfileTests(unittest.TestCase):
 
     def test_lockfile_integrity_hashes_do_not_trigger_high_entropy(self) -> None:
         digest = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        text = f"    resolution: {{integrity: sha512-{digest}}}\n"
+        text = "\n".join(
+            [
+                f"    resolution: {{integrity: sha512-{digest}}}",
+                f'      "integrity": "sha512-{digest}",',
+            ]
+        )
 
         hits = check_secrets.scan_text(text, "packages/openclaw-coven/pnpm-lock.yaml")
+
+        self.assertEqual(hits, [])
+
+    def test_lockfile_registry_tarball_urls_do_not_trigger_high_entropy(self) -> None:
+        text = (
+            '      "resolved": '
+            '"https://registry.npmjs.org/@rolldown/binding-darwin-arm64/-/binding-darwin-arm64-1.0.0-rc.18.tgz"'
+        )
+
+        hits = check_secrets.scan_text(text, "packages/openclaw-coven/package-lock.json")
 
         self.assertEqual(hits, [])
 
