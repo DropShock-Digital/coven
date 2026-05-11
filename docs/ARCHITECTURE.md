@@ -8,28 +8,58 @@ The versioned local socket API contract lives in [`docs/API-CONTRACT.md`](API-CO
 
 ```mermaid
 flowchart LR
-  User[Developer] --> CLI[coven CLI / TUI]
-  CLI -->|direct commands| Rust[Coven Rust CLI]
-  Rust --> Daemon[Coven daemon]
+  subgraph Clients["Client layer"]
+    User[Developer]
+    CLI["coven CLI / TUI"]
+    Comux["comux cockpit"]
+    OpenClaw[OpenClaw]
+    Plugin["@opencoven/coven plugin"]
+    OpenMeow["OpenMeow chat / intent client"]
+  end
 
-  Comux[comux cockpit] -->|HTTP over Unix socket| Daemon
-  OpenClaw[OpenClaw] --> Plugin[external @opencoven/coven plugin]
-  Plugin -->|HTTP over Unix socket| Daemon
-  OpenMeow[OpenMeow chat/intent client] -->|capabilities + actions| Daemon
+  subgraph DaemonCore["Daemon core"]
+    Daemon[Coven daemon]
+    Control["Control plane\n(capability discovery + action routing)"]
+    Policy["Policy + permission hints"]
+    AdapterBus["Adapter / event bus"]
+    Boundary["Project-root + cwd guard"]
+    HarnessRouter["Harness adapter router"]
+  end
 
-  Daemon --> Control[Control plane: capability discovery + action routing]
-  Control --> Policy[Policy + permission hints]
-  Control --> AdapterBus[Adapter/event bus]
-  AdapterBus -. desktop.automation .-> DesktopUse[desktop-use adapters]
+  subgraph Adapters["Harness adapters"]
+    Codex["Codex PTY"]
+    Claude["Claude Code PTY"]
+    DesktopUse["desktop-use adapters"]
+    Future["Hermes / Aider / Gemini\n(future adapters)"]
+  end
 
-  Daemon --> Boundary[Project-root + cwd guard]
-  Boundary --> Adapter[Harness adapter router]
-  Adapter --> Codex[Codex PTY]
-  Adapter --> Claude[Claude Code PTY]
-  Adapter -. future .-> Future[Hermes / Aider / Gemini / custom adapters]
+  subgraph Storage["Persistent storage"]
+    Store[(SQLite session ledger)]
+    Events[(append-only event log)]
+  end
 
-  Daemon --> Store[(SQLite session ledger)]
-  Daemon --> Events[(append-only event log)]
+  User --> CLI
+  CLI -->|direct commands| Rust["Coven Rust CLI"]
+  Rust --> Daemon
+
+  Comux -->|"HTTP over Unix socket"| Daemon
+  OpenClaw --> Plugin
+  Plugin -->|"HTTP over Unix socket"| Daemon
+  OpenMeow -->|"capabilities + actions"| Daemon
+
+  Daemon --> Control
+  Control --> Policy
+  Control --> AdapterBus
+  AdapterBus -.->|desktop.automation| DesktopUse
+
+  Daemon --> Boundary
+  Boundary --> HarnessRouter
+  HarnessRouter --> Codex
+  HarnessRouter --> Claude
+  HarnessRouter -.->|future| Future
+
+  Daemon --> Store
+  Daemon --> Events
   Codex --> Events
   Claude --> Events
 ```
@@ -45,37 +75,67 @@ sequenceDiagram
   participant H as Harness PTY
 
   U->>C: coven run codex "fix tests"
-  C->>D: POST /api/v1/sessions(projectRoot, cwd, harness, prompt)
+  activate C
+  C->>D: POST /api/v1/sessions (projectRoot, cwd, harness, prompt)
+  activate D
   D->>D: canonicalize projectRoot + cwd
   D->>D: reject outside-root or unsupported harness
   D->>S: create session metadata
   D->>H: spawn validated argv in PTY
+  activate H
   H-->>S: output / exit events
   D-->>C: session id + running status
+  deactivate D
+  deactivate C
+
+  Note over U,C: Browse and manage sessions
 
   U->>C: coven sessions
-  C->>S: list active sessions, or all with --all
+  activate C
+  C->>S: list active sessions, or all with --all flag
   C-->>U: interactive session browser
+  deactivate C
 
   U->>C: Rejoin / View Log / Summon / Archive / Sacrifice
-  C->>D: attach/input/kill when live
-  C->>S: archive/summon/sacrifice non-live session rituals
+  activate C
+  C->>D: attach / input / kill (when session is live)
+  C->>S: archive / summon / sacrifice (non-live session rituals)
+  deactivate C
+  deactivate H
 ```
 
 ## Authority boundary
 
 ```mermaid
 flowchart TD
-  Client[CLI, TUI, comux, OpenClaw plugin] --> Request[Launch / input / kill / list request]
-  Request --> Rust[Rank 0 authority: Rust daemon]
-  Rust --> RootCheck{projectRoot explicit?}
-  RootCheck -- no --> RejectRoot[Reject]
-  RootCheck -- yes --> CwdCheck{cwd canonicalized inside root?}
-  CwdCheck -- no --> RejectCwd[Reject]
-  CwdCheck -- yes --> HarnessCheck{harness allowlisted?}
-  HarnessCheck -- no --> RejectHarness[Reject with install hint]
-  HarnessCheck -- yes --> Spawn[Spawn harness with argv APIs]
-  Spawn --> Ledger[Persist session + events]
+  Client["CLI / TUI / comux / OpenClaw plugin"]
+  Request["Launch / input / kill / list request"]
+  Rust["Rank 0 authority: Rust daemon"]
+  RootCheck{"projectRoot\nexplicit?"}
+  CwdCheck{"cwd canonicalized\ninside root?"}
+  HarnessCheck{"harness\nallowlisted?"}
+  RejectRoot["❌ Reject"]
+  RejectCwd["❌ Reject"]
+  RejectHarness["❌ Reject with install hint"]
+  Spawn["Spawn harness with argv APIs"]
+  Ledger["Persist session + events"]
+
+  Client --> Request
+  Request --> Rust
+  Rust --> RootCheck
+  RootCheck -->|no| RejectRoot
+  RootCheck -->|yes| CwdCheck
+  CwdCheck -->|no| RejectCwd
+  CwdCheck -->|yes| HarnessCheck
+  HarnessCheck -->|no| RejectHarness
+  HarnessCheck -->|yes| Spawn
+  Spawn --> Ledger
+
+  style RejectRoot  fill:#fca5a5,stroke:#dc2626,color:#000
+  style RejectCwd   fill:#fca5a5,stroke:#dc2626,color:#000
+  style RejectHarness fill:#fca5a5,stroke:#dc2626,color:#000
+  style Spawn       fill:#86efac,stroke:#16a34a,color:#000
+  style Ledger      fill:#86efac,stroke:#16a34a,color:#000
 ```
 
 ## OpenMeow / automation boundary
