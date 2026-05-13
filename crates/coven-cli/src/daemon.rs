@@ -28,6 +28,12 @@ pub struct DaemonStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DaemonStatusState {
+    Running(DaemonStatus),
+    Stale(DaemonStatus),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DaemonSpawnSpec {
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -294,6 +300,10 @@ pub fn stop_background_server(coven_home: &Path) -> Result<bool> {
     stop_background_server_with_controller(coven_home, &SystemDaemonStopController)
 }
 
+pub fn background_server_status(coven_home: &Path) -> Result<Option<DaemonStatusState>> {
+    background_server_status_with_controller(coven_home, &SystemDaemonStopController)
+}
+
 trait DaemonStopController {
     fn signal_term(&self, pid: u32) -> Result<()>;
     fn pid_is_alive(&self, pid: u32) -> bool;
@@ -389,12 +399,7 @@ fn stop_background_server_with_controller(
                 status.pid
             );
         }
-        clear_status(coven_home)?;
-        let socket = daemon_socket_path(coven_home);
-        if socket.exists() {
-            std::fs::remove_file(&socket)
-                .with_context(|| format!("failed to remove daemon socket {}", socket.display()))?;
-        }
+        clear_status_and_socket(coven_home)?;
         return Ok(true);
     }
 
@@ -416,13 +421,39 @@ fn stop_background_server_with_controller(
         Err(_) => {}
     }
 
+    clear_status_and_socket(coven_home)?;
+    Ok(true)
+}
+
+fn background_server_status_with_controller(
+    coven_home: &Path,
+    controller: &dyn DaemonStopController,
+) -> Result<Option<DaemonStatusState>> {
+    let status = read_status(coven_home)?;
+    let Some(status) = status else {
+        return Ok(None);
+    };
+
+    if controller.status_matches_running_daemon(&status) {
+        return Ok(Some(DaemonStatusState::Running(status)));
+    }
+
+    if controller.pid_is_alive(status.pid) {
+        return Ok(Some(DaemonStatusState::Stale(status)));
+    }
+
+    clear_status_and_socket(coven_home)?;
+    Ok(None)
+}
+
+fn clear_status_and_socket(coven_home: &Path) -> Result<()> {
     clear_status(coven_home)?;
     let socket = daemon_socket_path(coven_home);
     if socket.exists() {
         std::fs::remove_file(&socket)
             .with_context(|| format!("failed to remove daemon socket {}", socket.display()))?;
     }
-    Ok(true)
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -801,6 +832,61 @@ mod tests {
 
         assert!(error.to_string().contains("could not be verified"));
         assert_eq!(*controller.signaled.lock().unwrap(), 0);
+        assert_eq!(read_status(temp_dir.path())?, Some(status));
+        Ok(())
+    }
+
+    #[test]
+    fn background_server_status_returns_running_for_verified_daemon() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let status = DaemonStatus {
+            pid: 12345,
+            started_at: "2026-04-27T10:00:00Z".to_string(),
+            socket: daemon_socket_path(temp_dir.path())
+                .to_string_lossy()
+                .into_owned(),
+        };
+        write_status(temp_dir.path(), &status)?;
+
+        let state = background_server_status_with_controller(
+            temp_dir.path(),
+            &FakeStopController {
+                pid_alive: true,
+                exited_after_signal: false,
+                signal_error: None,
+                verified_daemon: true,
+                signaled: std::sync::Arc::default(),
+            },
+        )?;
+
+        assert_eq!(state, Some(DaemonStatusState::Running(status)));
+        Ok(())
+    }
+
+    #[test]
+    fn background_server_status_returns_stale_without_clearing_live_unverified_pid() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let status = DaemonStatus {
+            pid: 12345,
+            started_at: "2026-04-27T10:00:00Z".to_string(),
+            socket: daemon_socket_path(temp_dir.path())
+                .to_string_lossy()
+                .into_owned(),
+        };
+        write_status(temp_dir.path(), &status)?;
+
+        let state = background_server_status_with_controller(
+            temp_dir.path(),
+            &FakeStopController {
+                pid_alive: true,
+                exited_after_signal: false,
+                signal_error: None,
+                verified_daemon: false,
+                signaled: std::sync::Arc::default(),
+            },
+        )?;
+
+        assert_eq!(state, Some(DaemonStatusState::Stale(status.clone())));
         assert_eq!(read_status(temp_dir.path())?, Some(status));
         Ok(())
     }

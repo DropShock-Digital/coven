@@ -14,6 +14,41 @@ use std::time::{Duration, Instant};
 use serde_json::{json, Value};
 
 #[test]
+fn daemon_status_clears_stale_metadata_when_daemon_is_gone() -> anyhow::Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let coven_home = temp_dir.path().join("coven-home");
+    fs::create_dir_all(&coven_home)?;
+    fs::write(
+        coven_home.join("daemon.json"),
+        r#"{
+  "pid": 999999,
+  "startedAt": "2026-01-01T00:00:00Z",
+  "socket": "/tmp/does-not-exist.sock"
+}
+"#,
+    )?;
+
+    let output = run_coven(
+        &coven_bin(),
+        &coven_home,
+        &std::env::var_os("PATH").unwrap_or_default(),
+        &["daemon", "status"],
+    )?;
+
+    assert_success("daemon status with stale metadata", &output);
+    assert_stdout_contains(
+        "daemon status with stale metadata",
+        &output,
+        "status=stopped",
+    );
+    assert!(
+        !coven_home.join("daemon.json").exists(),
+        "stale daemon metadata should be cleared"
+    );
+    Ok(())
+}
+
+#[test]
 fn smoke_daemon_session_replay_and_safe_session_rituals() -> anyhow::Result<()> {
     let temp_dir = tempfile::tempdir()?;
     let coven_home = temp_dir.path().join("coven-home");

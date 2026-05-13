@@ -1492,14 +1492,18 @@ fn run_daemon_command(command: DaemonCommand) -> Result<()> {
                 );
             }
         }
-        DaemonCommand::Status => match daemon::read_status(&home)? {
-            Some(status) => {
+        DaemonCommand::Status => match daemon::background_server_status(&home)? {
+            Some(daemon::DaemonStatusState::Running(status)) => {
                 let health = api::health_response(Some(status.clone()));
                 println!(
                     "coven daemon status=running ok={} pid={} socket={}",
                     health.ok, status.pid, status.socket
                 );
             }
+            Some(daemon::DaemonStatusState::Stale(status)) => println!(
+                "coven daemon status=stale ok=false pid={} socket={}",
+                status.pid, status.socket
+            ),
             None => println!("coven daemon status=stopped"),
         },
         DaemonCommand::Stop => {
