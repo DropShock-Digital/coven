@@ -382,11 +382,35 @@ fn list_session_events(coven_home: &Path, session_id: &str, query: &str) -> Resu
         );
     }
 
-    let after_seq = query_param(query, "afterSeq").and_then(|v| v.parse::<i64>().ok());
+    let after_seq = match query_param(query, "afterSeq") {
+        Some(v) => match v.parse::<i64>() {
+            Ok(n) => Some(n),
+            Err(_) => {
+                return api_error(
+                    400,
+                    "invalid_request",
+                    "afterSeq must be an integer.",
+                    Some(json!({ "afterSeq": v })),
+                );
+            }
+        },
+        None => None,
+    };
     let after_event_id = query_param(query, "afterEventId").map(str::to_string);
-    let limit = query_param(query, "limit")
-        .and_then(|v| v.parse::<i64>().ok())
-        .map(|l| l.clamp(1, MAX_EVENTS_LIMIT));
+    let limit = match query_param(query, "limit") {
+        Some(v) => match v.parse::<i64>() {
+            Ok(n) => Some(n.clamp(1, MAX_EVENTS_LIMIT)),
+            Err(_) => {
+                return api_error(
+                    400,
+                    "invalid_request",
+                    "limit must be an integer.",
+                    Some(json!({ "limit": v })),
+                );
+            }
+        },
+        None => None,
+    };
 
     let opts = store::EventsQueryOptions {
         after_seq,
@@ -1209,6 +1233,42 @@ mod tests {
 
         assert_eq!(response.status, 400);
         assert!(response.body.contains(r#""code":"invalid_request""#));
+        Ok(())
+    }
+
+    #[test]
+    fn events_endpoint_returns_structured_error_for_non_integer_limit() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        insert_test_session(temp_dir.path(), "session-1")?;
+
+        let response = handle_request(
+            "GET",
+            "/events?sessionId=session-1&limit=foo",
+            temp_dir.path(),
+            None,
+        )?;
+
+        assert_eq!(response.status, 400);
+        assert!(response.body.contains(r#""code":"invalid_request""#));
+        assert!(response.body.contains(r#""limit":"foo""#));
+        Ok(())
+    }
+
+    #[test]
+    fn events_endpoint_returns_structured_error_for_non_integer_after_seq() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        insert_test_session(temp_dir.path(), "session-1")?;
+
+        let response = handle_request(
+            "GET",
+            "/events?sessionId=session-1&afterSeq=foo",
+            temp_dir.path(),
+            None,
+        )?;
+
+        assert_eq!(response.status, 400);
+        assert!(response.body.contains(r#""code":"invalid_request""#));
+        assert!(response.body.contains(r#""afterSeq":"foo""#));
         Ok(())
     }
 
