@@ -372,16 +372,6 @@ fn session_not_live_response(session_id: &str) -> Result<ApiResponse> {
 }
 
 fn list_session_events(coven_home: &Path, session_id: &str, query: &str) -> Result<ApiResponse> {
-    let conn = store::open_store(&store_path(coven_home))?;
-    if store::get_session(&conn, session_id)?.is_none() {
-        return api_error(
-            404,
-            "session_not_found",
-            "Session was not found.",
-            Some(json!({ "sessionId": session_id })),
-        );
-    }
-
     let after_seq = match query_param(query, "afterSeq") {
         Some(v) => match v.parse::<i64>() {
             Ok(n) => Some(n),
@@ -411,6 +401,16 @@ fn list_session_events(coven_home: &Path, session_id: &str, query: &str) -> Resu
         },
         None => None,
     };
+
+    let conn = store::open_store(&store_path(coven_home))?;
+    if store::get_session(&conn, session_id)?.is_none() {
+        return api_error(
+            404,
+            "session_not_found",
+            "Session was not found.",
+            Some(json!({ "sessionId": session_id })),
+        );
+    }
 
     let opts = store::EventsQueryOptions {
         after_seq,
@@ -1262,6 +1262,38 @@ mod tests {
         let response = handle_request(
             "GET",
             "/events?sessionId=session-1&afterSeq=foo",
+            temp_dir.path(),
+            None,
+        )?;
+
+        assert_eq!(response.status, 400);
+        assert!(response.body.contains(r#""code":"invalid_request""#));
+        assert!(response.body.contains(r#""afterSeq":"foo""#));
+        Ok(())
+    }
+
+    #[test]
+    fn events_endpoint_validates_limit_before_session_lookup() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let response = handle_request(
+            "GET",
+            "/events?sessionId=ghost&limit=foo",
+            temp_dir.path(),
+            None,
+        )?;
+
+        assert_eq!(response.status, 400);
+        assert!(response.body.contains(r#""code":"invalid_request""#));
+        assert!(response.body.contains(r#""limit":"foo""#));
+        Ok(())
+    }
+
+    #[test]
+    fn events_endpoint_validates_after_seq_before_session_lookup() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let response = handle_request(
+            "GET",
+            "/events?sessionId=ghost&afterSeq=foo",
             temp_dir.path(),
             None,
         )?;
