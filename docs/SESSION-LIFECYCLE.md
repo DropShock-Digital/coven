@@ -48,6 +48,7 @@ For a completed session, attach acts like a log viewer. For a running session, a
 
 - In an interactive terminal, it opens the session browser.
 - When piped or run with `--plain`, it prints table output.
+- `--json` prints machine-readable session records for local clients.
 - `--all` includes archived sessions.
 - `--manage` forces the browser.
 

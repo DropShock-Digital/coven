@@ -130,6 +130,8 @@ For scripts or copy/paste workflows:
 ```sh
 coven sessions --plain
 coven sessions --all --plain
+coven sessions --json
+coven sessions --json --all
 ```
 
 ## Attach, archive, summon, and sacrifice

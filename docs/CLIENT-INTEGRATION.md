@@ -106,6 +106,8 @@ A native control room can make Coven easier to operate by showing:
 - logs and traces;
 - docs and troubleshooting links.
 
+Use `coven sessions --json` for active sessions and `coven sessions --json --all` when the client needs archived records too. The CLI returns a top-level object with a `sessions` array, and each record uses the same `SessionRecord` field names exposed by the daemon API, including `project_root`, `status`, `created_at`, `updated_at`, and nullable `archived_at`.
+
 The control room should still use the same socket API and capability handshake as other clients.
 
 ## Desktop automation adapters
