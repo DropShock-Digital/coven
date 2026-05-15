@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+npm-debug.log*
+.env
+.env.local
+.cache/
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+pagefind/

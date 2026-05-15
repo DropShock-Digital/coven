@@ -19,6 +19,7 @@ use crossterm::{
 use uuid::Uuid;
 
 mod api;
+mod chat;
 mod control_plane;
 mod daemon;
 mod harness;
@@ -51,6 +52,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    #[command(about = "Interactive chat with Coven agents")]
+    Chat,
     #[command(about = "Open the slash-command TUI")]
     Tui,
     #[command(about = "Check local setup and print next steps")]
@@ -143,6 +146,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         None => run_magical_tui(),
+        Some(Command::Chat) => chat::run_chat(),
         Some(Command::Tui) => run_magical_tui(),
         Some(Command::Doctor) => run_doctor(),
         Some(Command::Daemon { command }) => run_daemon_command(command),
@@ -2060,6 +2064,16 @@ mod tests {
         match cli.command {
             Some(Command::Tui) => {}
             other => panic!("expected tui command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cli_accepts_chat_command() {
+        let cli = Cli::parse_from(["coven", "chat"]);
+
+        match cli.command {
+            Some(Command::Chat) => {}
+            other => panic!("expected chat command, got {other:?}"),
         }
     }
 
