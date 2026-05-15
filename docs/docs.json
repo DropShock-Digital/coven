@@ -138,7 +138,8 @@
               {
                 "group": "Project",
                 "pages": [
-                  "PRODUCT-SPEC"
+                  "PRODUCT-SPEC",
+                  "reference/changelog"
                 ]
               }
             ]
