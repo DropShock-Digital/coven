@@ -1,5 +1,6 @@
 ---
 summary: "Per-release notes for the Coven runtime, CLI, and local API."
+description: "Weekly release notes for Coven covering new features, updates, and bug fixes across the runtime, CLI, TUI, and local socket API."
 read_when:
   - Looking up what changed
 title: "Changelog"
