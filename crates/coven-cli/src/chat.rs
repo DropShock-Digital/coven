@@ -10,7 +10,7 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Layout, Margin, Rect},
-    style::{Color, Modifier, Style, Stylize},
+    style::{Color, Style, Stylize},
     text::{Line, Span, Text},
     widgets::{
         Block, Borders, Clear, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation,
@@ -25,7 +25,8 @@ use crate::harness;
 
 const PURPLE: Color = Color::Indexed(141); // #af87ff — signature purple
 const GOLD: Color = Color::Indexed(220); // #ffd700 — accent gold
-const ROSE: Color = Color::Indexed(218); // #ffafdf — warm accent
+#[allow(dead_code)]
+const ROSE: Color = Color::Indexed(218); // #ffafdf — warm accent (reserved for v0.2)
 const MOON: Color = Color::Indexed(117); // #87d7ff — cool accent
 const DIM_FG: Color = Color::Indexed(243); // muted gray
 const SURFACE: Color = Color::Indexed(235); // dark surface
@@ -66,6 +67,7 @@ enum InputMode {
 enum SlashCommandResult {
     Handled,
     Quit,
+    #[allow(dead_code)]
     Unknown(String),
 }
 
@@ -83,6 +85,7 @@ struct App {
     show_help: bool,
     spinner_frame: usize,
     is_responding: bool,
+    #[allow(dead_code)]
     response_buffer: String,
     last_tick: Instant,
 }
@@ -483,6 +486,14 @@ fn discover_agents() -> Vec<AgentInfo> {
 fn render_ui(f: &mut Frame, app: &mut App) {
     let area = f.area();
 
+    // Guard against impossibly small terminals
+    if area.width < 10 || area.height < 5 {
+        let msg = Paragraph::new("Terminal too small")
+            .style(Style::default().fg(PURPLE));
+        f.render_widget(msg, area);
+        return;
+    }
+
     // Background fill
     f.render_widget(Block::default().style(Style::default().bg(Color::Black)), area);
 
@@ -675,10 +686,12 @@ fn render_input(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(input_widget, area);
 
     // Position cursor
-    let cursor_x = area.x + 1 + app.cursor_pos as u16;
-    let cursor_y = area.y + 1;
-    if cursor_x < area.x + area.width - 1 {
-        f.set_cursor_position((cursor_x, cursor_y));
+    if area.width > 2 && area.height > 1 {
+        let cursor_x = area.x + 1 + app.cursor_pos as u16;
+        let cursor_y = area.y + 1;
+        if cursor_x < area.x + area.width.saturating_sub(1) {
+            f.set_cursor_position((cursor_x, cursor_y));
+        }
     }
 }
 
