@@ -1,74 +1,254 @@
-# OpenCoven Documentation
+# Coven Documentation
 
-This directory holds the product and architecture notes for Coven, the OpenCoven harness substrate.
+Welcome to the Coven documentation site repository. This is where all documentation for the Coven agent framework lives.
 
-OpenCoven is an open ecosystem for persistent AI familiars: named agents with memory, tools, identity, roles, and continuity. Coven is the local harness substrate that helps those systems run inside explicit project boundaries.
+## 📁 Structure
 
-The guiding promise: OpenCoven turns AI from a blank chatbox into a living workspace of agents that remember, coordinate, and belong to the user.
-
-## Two layouts in this folder
-
-Coven's docs are in transition. Both layouts live here today:
-
-1. **Mintlify-style scaffold** (new). The page tree under `docs.json` powers a future `docs.opencoven.ai` site that mirrors the OpenClaw docs structure. Entry points:
-   - [`index.md`](index.md) — landing page.
-   - [`docs.json`](docs.json) — navigation tabs and groups.
-   - [`start/`](start/), [`install/`](install/), [`harnesses/`](harnesses/), [`familiars/`](familiars/), [`sessions/`](sessions/), [`memory/`](memory/), [`rituals/`](rituals/), [`capabilities/`](capabilities/), [`tools/`](tools/), [`automation/`](automation/), [`plugins/`](plugins/), [`models/`](models/), [`platforms/`](platforms/), [`daemon/`](daemon/), [`reference/`](reference/), [`help/`](help/).
-   - [`AGENTS.md`](AGENTS.md) — contributor rules for the docs site.
-2. **Flat canonical notes** (legacy, still authoritative for engineering). The all-caps files listed below remain the source-of-truth for the current Coven implementation. The Mintlify scaffold absorbs them over time.
-
-## Start here
-
-- [Getting started](GETTING-STARTED.md) — first install, first daemon, first session, and contributor checks.
-- [Concepts](CONCEPTS.md) — core nouns: harness, project root, session, daemon, client, control plane, and rituals.
-- [Glossary](GLOSSARY.md) — short definitions for recurring product and architecture terms.
-- [Public roadmap](ROADMAP.md) — community-facing progress snapshot across Coven, comux, and integrations.
-- [comux + Coven demo loop](COMUX-DEMO-LOOP.md) — Coven-side CLI/API contract for the visible comux cockpit flow.
-- [Product spec](PRODUCT-SPEC.md) — what Coven is and what belongs in MVP.
-- [Architecture diagrams](ARCHITECTURE.md) — runtime topology, session lifecycle, and authority boundary diagrams.
-- [Session lifecycle](SESSION-LIFECYCLE.md) — launch, attach/replay, archive, summon, sacrifice, orphan recovery, and events.
-- [Authentication and local access](AUTH.md) — current same-user Unix-socket access model, provider-auth boundary, and hardening gaps.
-- [Local API](API.md) — versioned Unix-socket API contract for comux, OpenClaw, and other clients.
-- [Operational model](OPERATIONAL-MODEL.md) — authority boundaries between Rust, comux, OpenClaw, and npm wrappers.
-- [Safety model](SAFETY-MODEL.md) — local trust boundary, secret handling, socket posture, and automation approvals.
-- [Client integration guide](CLIENT-INTEGRATION.md) — expectations for comux, OpenClaw, OpenMeow, desktop clients, and future control rooms.
-- [Harness adapter guide](HARNESS-ADAPTERS.md) — current Codex/Claude adapter shape and the bar for future harness support.
-- [Troubleshooting](TROUBLESHOOTING.md) — common setup, daemon, harness, session, API, and verification problems.
-- [MVP plan](MVP-PLAN.md) — implementation plan and success criteria.
-- [Future harnesses](FUTURE-HARNESSES.md) — adapter direction after Codex and Claude Code.
-- [Brand assets](BRAND.md) — canonical logo, token, typography, and social asset pack.
-- [Brand adherence checklist](BRANDING-ADHERENCE.md) — implementation progress, exceptions, and risks.
-- [Documentation maintenance](DOCS-MAINTENANCE.md) — public-doc rules, canonical names, secret avoidance, and verification checks.
-
-## OpenClaw rescue loop
-
-Coven can help repair a local OpenClaw source checkout without relying on a healthy OpenClaw runtime:
-
-```sh
-coven patch openclaw
-coven patch openclaw "fix Codex auth profile order after invalidated OAuth token"
-coven patch openclaw --repo ~/Documents/GitHub/openclaw/openclaw --harness codex --dry-run
+```
+docs/
+├── docs/                      # Markdown source files
+│   ├── getting-started/      # Installation, quickstart, first steps
+│   ├── core/                 # Architecture, agents, API reference
+│   │   ├── architecture/     # Core concepts (harnesses, familiars, sessions, memory)
+│   │   ├── agents/          # Built-in agents (Nova, Cody, Sage, etc.)
+│   │   └── api/             # Gateway API reference
+│   ├── guides/              # How-to guides and tutorials
+│   └── resources/           # Troubleshooting and examples
+├── scripts/docs-site/        # Build scripts
+├── docs.json                 # Mintlify configuration
+├── package.json             # Dependencies
+└── README.md               # This file
 ```
 
-The guided flow detects the repo, asks what is broken, launches a supervised Codex or Claude Code session, runs verification, and reports changed files. Coven does not commit or push in v0.
+## 🚀 Quick Start
 
-## Documentation stance
+### Install Dependencies
 
-Keep these docs aligned with VMUX-style clarity while staying specific to OpenCoven:
+```bash
+npm install
+```
 
-- Short public-facing README first.
-- Concrete quick-start commands.
-- Explicit local trust boundary.
-- Clear relationship to comux and OpenClaw.
-- Consistent OpenCoven positioning: persistent familiars, user-owned systems, memory, identity, tools, orchestration, and multi-agent collaboration.
-- Be precise about npm status: packages are published for early adopters, but Coven is still an early local-first MVP.
+### Build the Documentation
 
-## Canonical language
+```bash
+npm run docs:build
+```
 
-- Ecosystem/org: **OpenCoven**
-- Product/daemon/CLI: **Coven**
-- Command: `coven`
-- CLI package: `@opencoven/cli`
-- OpenClaw plugin package: `@opencoven/coven`
-- Community: `discord.gg/opencoven`
-- X / Twitter: `@OpenCvn`
+This generates static HTML in `dist/docs-site/`.
+
+### Development Mode
+
+```bash
+npm run docs:build:dev
+```
+
+### Check Build
+
+```bash
+npm run docs:check
+```
+
+Runs build + smoke tests.
+
+## 📝 Writing Documentation
+
+### Markdown Format
+
+All pages use GitHub-flavored Markdown with YAML frontmatter:
+
+```markdown
+---
+title: "Page Title"
+description: "Brief description for SEO"
+---
+
+# Main Heading
+
+Page content here...
+```
+
+### File Organization
+
+- One section per directory
+- One page per `.md` file
+- Use `index.md` for section overviews
+
+### Navigation
+
+Edit `docs.json` to add pages to the navigation structure:
+
+```json
+{
+  "tabs": [
+    {
+      "tab": "Get started",
+      "groups": [
+        {
+          "group": "Section Name",
+          "pages": [
+            "getting-started/index",
+            "getting-started/install"
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+## 🎨 Styling
+
+Pages use the Mintlify theme via `docs.json`. Customize:
+
+- **Colors** - Edit `colors` in `docs.json`
+- **Fonts** - Edit `fonts` in `docs.json`
+- **Logo** - Replace files in `assets/`
+
+## 🔍 Search
+
+The documentation supports full-text search via Pagefind. The search index is generated automatically during build:
+
+```bash
+npm run docs:build
+# Generates search-index.json
+```
+
+## 📦 Build Outputs
+
+- **Static HTML** - `dist/docs-site/` (for deployment)
+- **Search Index** - `dist/docs-site/search-index.json`
+- **Manifest** - Generated during build
+
+## 🌐 Deployment
+
+### Cloudflare Pages
+
+```bash
+npm run docs:build
+npm run docs:r2:upload
+```
+
+### Vercel
+
+```bash
+npm run docs:build
+# Deploy dist/docs-site/ to Vercel
+```
+
+### Local Testing
+
+```bash
+npm run docs:build
+# Serve dist/docs-site/ with any HTTP server
+npx http-server dist/docs-site/
+```
+
+## ✅ Quality Checks
+
+### Smoke Tests
+
+```bash
+npm run docs:smoke
+```
+
+Verifies key pages exist and search index is valid.
+
+### Full Check
+
+```bash
+npm run docs:check
+```
+
+Runs build + smoke tests.
+
+## 📚 Content Guidelines
+
+### Getting Started
+
+- Installation steps
+- Quick start guide
+- First agent walkthrough
+- Concepts introduction
+
+### Core Documentation
+
+- Architecture explanation
+- Component details
+- API reference
+- Agent profiles
+
+### Guides
+
+- Step-by-step instructions
+- Code examples
+- Best practices
+- Common patterns
+
+### Resources
+
+- Troubleshooting
+- FAQ
+- Real-world examples
+- Advanced topics
+
+## 🔗 Internal Links
+
+Use relative links:
+
+```markdown
+[My Link](/getting-started/install)  # Correct
+[My Link](../other-page)              # Incorrect
+```
+
+## 🏗️ Adding New Pages
+
+1. Create `.md` file in appropriate directory
+2. Add YAML frontmatter with title + description
+3. Write content using Markdown
+4. Add entry to `docs.json` navigation
+5. Run `npm run docs:check` to verify
+
+## 📊 Build Performance
+
+Build times depend on documentation size:
+
+- < 100 pages: ~1s
+- < 500 pages: ~5s
+- > 500 pages: ~15s
+
+Optimize large docs by:
+
+- Breaking into smaller sections
+- Using external links for references
+- Archiving old content
+
+## 🐛 Troubleshooting
+
+**Build fails with "Cannot find module"**
+```bash
+npm install
+npm run docs:build
+```
+
+**Pages not showing up**
+- Verify page is added to `docs.json`
+- Check frontmatter syntax
+- Ensure filename matches configuration
+
+**Search index is empty**
+- Run full build: `npm run docs:build`
+- Check `dist/docs-site/search-index.json` exists
+
+## 📞 Support
+
+- GitHub Issues: Report bugs and request features
+- Discord: Ask questions and get help
+- Email: docs@opencoven.ai
+
+## 📄 License
+
+Same as Coven project (TBD)
+
+---
+
+**Built with ❤️ for Coven**

@@ -19,6 +19,7 @@ use crossterm::{
 use uuid::Uuid;
 
 mod api;
+mod chat;
 mod control_plane;
 mod daemon;
 mod harness;
@@ -51,6 +52,8 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    #[command(about = "Interactive chat with Coven agents")]
+    Chat,
     #[command(about = "Open the slash-command TUI")]
     Tui,
     #[command(about = "Check local setup and print next steps")]
@@ -143,28 +146,29 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         None => run_magical_tui(),
+        Some(Command::Chat) => chat::run_chat(),
         Some(Command::Tui) => run_magical_tui(),
-        Some(Command::Doctor) => run_doctor(),
-        Some(Command::Daemon { command }) => run_daemon_command(command),
-        Some(Command::Run {
-            harness,
-            prompt,
-            cwd,
-            title,
-            detach,
-        }) => run_session(&harness, &prompt, cwd.as_deref(), title.as_deref(), detach),
-        Some(Command::Sessions {
-            all,
-            manage,
-            plain,
-            json,
-        }) => run_sessions_command(all, manage, plain, json),
-        Some(Command::Attach { session_id }) => attach_session(&session_id),
-        Some(Command::Summon { session_id }) => summon_session_command(&session_id),
-        Some(Command::Archive { session_id }) => archive_session_command(&session_id),
-        Some(Command::Sacrifice { session_id, yes }) => sacrifice_session_command(&session_id, yes),
-        Some(Command::Patch { command }) => run_patch_command(command),
-        Some(Command::Pc { command }) => pc::run_pc_command(command),
+            Some(Command::Doctor) => run_doctor(),
+            Some(Command::Daemon { command }) => run_daemon_command(command),
+            Some(Command::Run {
+                harness,
+                prompt,
+                cwd,
+                title,
+                detach,
+            }) => run_session(&harness, &prompt, cwd.as_deref(), title.as_deref(), detach),
+            Some(Command::Sessions {
+                all,
+                manage,
+                plain,
+                json,
+            }) => run_sessions_command(all, manage, plain, json),
+            Some(Command::Attach { session_id }) => attach_session(&session_id),
+            Some(Command::Summon { session_id }) => summon_session_command(&session_id),
+            Some(Command::Archive { session_id }) => archive_session_command(&session_id),
+            Some(Command::Sacrifice { session_id, yes }) => sacrifice_session_command(&session_id, yes),
+            Some(Command::Patch { command }) => run_patch_command(command),
+            Some(Command::Pc { command }) => pc::run_pc_command(command),
     }
 }
 
