@@ -78,7 +78,7 @@ function pageToMarkdownPath(page) {
 }
 
 function pageUrl(page) {
-  const normalized = page.replace(/^\/+/, '').replace(/\/index$/, '');
+  const normalized = page.replace(/^\/+/, '').replace(/\.md$/, '').replace(/\/index$/, '');
   return normalized === 'index' ? '/' : `/${normalized}`;
 }
 

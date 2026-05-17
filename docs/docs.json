@@ -32,11 +32,7 @@
     },
     "heading": {
       "family": "DM Sans",
-      "weight": "700"
-    },
-    "code": {
-      "family": "Fragment Mono",
-      "weight": "400"
+      "weight": 700
     }
   },
   "favicon": "/assets/opencoven-icon.svg",
@@ -181,7 +177,7 @@
                   "BRAND",
                   "PRODUCT-SPEC",
                   "reference/releasing",
-                  "reference/changelog"
+                  "reference/release-notes"
                 ]
               }
             ]
@@ -208,7 +204,7 @@
               {
                 "group": "Proyecto",
                 "pages": [
-                  "es/reference/changelog",
+                  "es/reference/release-notes",
                   "es/reference/releasing"
                 ]
               }
@@ -236,7 +232,7 @@
               {
                 "group": "Проект",
                 "pages": [
-                  "ru/reference/changelog",
+                  "ru/reference/release-notes",
                   "ru/reference/releasing"
                 ]
               }
