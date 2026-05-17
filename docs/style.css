@@ -270,6 +270,35 @@ iframe {
   color: inherit;
 }
 
+.home-intro {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+  margin: 6px 0 26px;
+}
+
+.home-intro p {
+  margin: 0;
+}
+
+.home-intro p + p {
+  margin-top: 10px;
+}
+
+.home-intro-mark {
+  width: 88px;
+  height: 88px;
+  border: 1px solid color-mix(in oklab, var(--oc-border) 70%, transparent);
+  border-radius: 8px;
+}
+
+.home-intro-kicker {
+  color: var(--oc-text);
+  font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  font-size: 18px;
+}
+
 .doc-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -460,6 +489,16 @@ a.doc-card:hover {
 
   .doc-content h1 {
     font-size: 29px;
+  }
+
+  .home-intro {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+
+  .home-intro-mark {
+    width: 72px;
+    height: 72px;
   }
 }
 
