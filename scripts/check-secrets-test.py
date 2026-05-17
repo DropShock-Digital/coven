@@ -102,6 +102,19 @@ class SecretGuardLockfileTests(unittest.TestCase):
 
         self.assertEqual(hits, [])
 
+    def test_github_advisory_links_do_not_trigger_high_entropy(self) -> None:
+        text = (
+            "Resolved advisory "
+            "https://github.com/advisories/GHSA-rhfx-m35p-ff5j in the release notes."
+        )
+
+        hits = check_secrets.scan_text(text, "docs/reference/changelog.md")
+
+        self.assertEqual(hits, [])
+
+    def test_history_scan_defaults_to_head_only(self) -> None:
+        self.assertEqual(check_secrets.history_blob_hits.__defaults__, ("HEAD",))
+
     def test_base64_like_values_still_trigger_high_entropy(self) -> None:
         token = "m9R3tQv7WzK2pL5nX8cF1gJ4sD6hY0aB/EuIqOwPz9RkTlVxCyNmS3HdG7fA"
         text = f"value: {token}\n"

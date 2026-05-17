@@ -10,9 +10,9 @@ title: "Changelog y notas de release de Coven"
 
 ### Correcciones de errores
 
-- **Pulsaciones dobles corregidas en la TUI de Windows.** `coven tui` y el navegador de sesiones ahora solo reaccionan a eventos de pulsación de tecla en Windows, eliminando el bug de entrada duplicada en el que escribir `a` producía `aa`, las flechas saltaban dos filas y Enter se activaba dos veces. Consulta [Coven TUI](/start/coven-tui) e [Instalación en Windows](/install/windows).
+- **Pulsaciones dobles corregidas en la TUI de Windows.** `coven tui` y el navegador de sesiones ahora solo reaccionan a eventos de pulsación de tecla en Windows, eliminando el bug de entrada duplicada en el que escribir `a` producía `aa`, las flechas saltaban dos filas y Enter se activaba dos veces. Consulta [Coven TUI](/start/coven-tui) y [Getting started](/GETTING-STARTED).
 - **La TUI ya no se cae en terminales pequeñas.** Tanto `coven tui` como `coven chat` ahora protegen sus cálculos de layout frente a tamaños de terminal muy pequeños, de modo que redimensionar a una ventana estrecha o baja ya no provoca el cierre de la sesión. Consulta [Coven TUI](/start/coven-tui).
-- **Se acabaron las pulsaciones dobles en la TUI de Windows.** El menú de la TUI de Coven y el navegador de sesiones ahora filtran únicamente los eventos `Press`. Al escribir `a` ya no se inserta `aa`, las flechas avanzan una fila por pulsación y Enter activa la selección una sola vez. No hay cambios de comportamiento en macOS ni en Linux. Consulta [Coven TUI](/start/coven-tui).
+- **Higiene de gates de release.** El guard de secretos de release pública ahora permite URLs públicas de avisos de GitHub y escanea el historial de release desde `HEAD`, para que ramas remotas obsoletas no bloqueen el gate actual.
 
 ### Seguridad
 
@@ -22,7 +22,7 @@ title: "Changelog y notas de release de Coven"
 
 ### Actualizaciones
 
-- **Tema TUI alineado con la marca.** Tanto `coven tui` como `coven chat` ahora comparten una paleta unificada y alineada con la marca, con tokens semánticos consistentes para los estilos primary, agent, user, hint, surface y dim. Los colores se adaptan a tu terminal automáticamente: truecolor en terminales de 24 bits, 256 colores en terminales legacy, y sin color cuando la salida está canalizada o `NO_COLOR` está configurado. Consulta [Variables de entorno](/help/environment).
+- **Tema TUI alineado con la marca.** Tanto `coven tui` como `coven chat` ahora comparten una paleta unificada y alineada con la marca, con tokens semánticos consistentes para los estilos primary, agent, user, hint, surface y dim. Los colores se adaptan a tu terminal automáticamente: truecolor en terminales de 24 bits, 256 colores en terminales legacy, y sin color cuando la salida está canalizada o `NO_COLOR` está configurado. Consulta [Troubleshooting](/TROUBLESHOOTING).
 
 ## Cómo leer este changelog
 
@@ -46,17 +46,17 @@ Las entradas son semanales, primero las más recientes. Los elementos dentro de 
 ### Nuevas funcionalidades
 
 - **TUI de Coven orientada a prompts.** Ejecutar `coven` (o `coven tui`) ahora abre una interfaz interactiva basada en Ratatui. Escribe tareas en formato libre, ejecuta slash commands (`/help`, `/agent`, `/clear`, `/export`, `/exit`) y navega por los menús de rituales con las teclas de flecha. Funciona sobre SSH y se redimensiona de forma segura. Consulta [Coven TUI](/start/coven-tui).
-- **Diagnóstico y alivio con `coven pc`.** Una herramienta de presión del sistema orientada primero a macOS. Los comandos de solo lectura muestran instantáneas de CPU, memoria, disco y procesos principales; las operaciones de escritura (`coven pc kill`, `coven pc cache clear`) requieren una puerta `--confirm` explícita. Consulta la [referencia de la CLI](/reference/cli) y [Troubleshooting](/help/troubleshooting).
-- **Contrato de la API local v1.** La API por socket del daemon ahora expone endpoints versionados de salud y capacidades, respuestas de error estructuradas y paginación de eventos basada en cursor. Los clientes pueden negociar funcionalidades en lugar de adivinar. Consulta [Contrato de la API](/reference/api-contract) y [Eventos](/reference/api-events).
-- **Salida JSON de sesiones.** `coven sessions --json` emite listados de sesiones legibles por máquina para scripts, dashboards y clientes externos. Consulta [comux JSON sessions](/sessions/comux-json).
-- **Ruta de instalación en Windows.** Coven ahora distribuye un paquete npm para Windows, de modo que `npx @opencoven/cli` funciona en Windows nativo junto con macOS y Linux. Consulta [Instalación en Windows](/install/windows).
+- **Diagnóstico y alivio con `coven pc`.** Una herramienta de presión del sistema orientada primero a macOS. Los comandos de solo lectura muestran instantáneas de CPU, memoria, disco y procesos principales; las operaciones de escritura (`coven pc kill`, `coven pc cache clear`) requieren una puerta `--confirm` explícita. Consulta la [referencia de la CLI](/reference/cli) y [Troubleshooting](/TROUBLESHOOTING).
+- **Contrato de la API local v1.** La API por socket del daemon ahora expone endpoints versionados de salud y capacidades, respuestas de error estructuradas y paginación de eventos basada en cursor. Los clientes pueden negociar funcionalidades en lugar de adivinar. Consulta [Contrato de la API](/API-CONTRACT) y [Local API](/API).
+- **Salida JSON de sesiones.** `coven sessions --json` emite listados de sesiones legibles por máquina para scripts, dashboards y clientes externos. Consulta [Comux demo loop](/COMUX-DEMO-LOOP).
+- **Ruta de instalación en Windows.** Coven ahora distribuye un paquete npm para Windows, de modo que `npx @opencoven/cli` funciona en Windows nativo junto con macOS y Linux. Consulta [Getting started](/GETTING-STARTED).
 
 ### Actualizaciones
 
-- **Posicionamiento y marca de OpenCoven.** Se refrescó la copia de producto en la documentación y la CLI para enmarcar a Coven como un ecosistema de familiares de IA persistentes, con tokens de marca y guía de diseño actualizados. Consulta [Marca](/reference/brand).
-- **Paleta de marca refinada.** Se actualizó la paleta de OpenCoven a un gris lavanda apagado (`#9A8ECD`) con un nuevo sistema de acentos complementarios y tokens de superficie dedicados para modo claro y oscuro. Se preservan los alias de color legacy existentes, así que no se requiere ninguna acción para adoptar la nueva apariencia. Consulta [Marca](/reference/brand).
+- **Posicionamiento y marca de OpenCoven.** Se refrescó la copia de producto en la documentación y la CLI para enmarcar a Coven como un ecosistema de familiares de IA persistentes, con tokens de marca y guía de diseño actualizados.
+- **Paleta de marca refinada.** Se actualizó la paleta de OpenCoven a un gris lavanda apagado (`#9A8ECD`) con un nuevo sistema de acentos complementarios y tokens de superficie dedicados para modo claro y oscuro. Se preservan los alias de color legacy existentes, así que no se requiere ninguna acción para adoptar la nueva apariencia.
 - **Tema TUI alineado con la marca.** La TUI de Coven ahora utiliza un tema unificado alineado con la paleta de OpenCoven. Los fallbacks elegantes para terminales sin color, de 256 colores y truecolor mantienen su legibilidad localmente, sobre SSH y dentro de CI. Consulta [Coven TUI](/start/coven-tui).
-- **Troubleshooting: salud y presión del sistema.** Se añadió una sección que enlaza desde el flujo canónico de troubleshooting a `coven pc` para diagnosticar presión local de CPU, memoria y disco. Consulta [Troubleshooting](/help/troubleshooting).
+- **Troubleshooting: salud y presión del sistema.** Se añadió una sección que enlaza desde el flujo canónico de troubleshooting a `coven pc` para diagnosticar presión local de CPU, memoria y disco. Consulta [Troubleshooting](/TROUBLESHOOTING).
 - **IDs completos de sesión en la salida plain.** `coven sessions --plain` ahora imprime los IDs completos de sesión para que puedan copiarse directamente a comandos posteriores.
 
 ### Correcciones de errores

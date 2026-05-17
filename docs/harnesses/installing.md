@@ -122,7 +122,7 @@ coven doctor
 
 ## Related
 
-- [Harnesses](/harnesses/index)
+- [Harnesses](/harnesses)
 - [Codex harness](/harnesses/codex)
 - [Claude Code harness](/harnesses/claude-code)
 - [Harness adapters](/HARNESS-ADAPTERS)
