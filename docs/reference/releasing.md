@@ -1,6 +1,6 @@
 ---
 summary: "Release flow for @opencoven/cli and platform packages."
-description: "Operator runbook for releasing Coven to npm: preflight checks, dry-run publishing, cutting native platform packages, and postflight verification steps."
+description: "Operator runbook for releasing Coven to npm: preflight checks, dry-run, publishing the CLI wrapper and native platform packages, and postflight verification."
 read_when:
   - Cutting a release
 title: "Releasing Coven to npm"
