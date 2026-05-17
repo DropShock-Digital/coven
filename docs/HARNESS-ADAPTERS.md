@@ -101,3 +101,23 @@ If upstream ids become useful, store them as metadata rather than replacing Cove
 6. **Client compatibility** - update docs and integration tests.
 
 Do not skip from research directly to public support.
+
+```mermaid
+flowchart LR
+  S1["1. Research note\n(public CLI shape + risks)"] --> S2
+  S2["2. argv construction tests\n(no shell, prompt last)"] --> S3
+  S3["3. coven doctor detection\n(install + auth hints)"] --> S4
+  S4["4. Launch smoke\n(temp project, fake creds)"] --> S5
+  S5["5. Attach / replay smoke\n(events round-trip)"] --> S6
+  S6["6. Client compatibility\n(comux + plugin tests)"] --> Done(["Public support"])
+
+  style S1 fill:#3D3547,stroke:#9A8ECD,color:#fff
+  style S2 fill:#3D3547,stroke:#9A8ECD,color:#fff
+  style S3 fill:#3D3547,stroke:#9A8ECD,color:#fff
+  style S4 fill:#3D3547,stroke:#9A8ECD,color:#fff
+  style S5 fill:#3D3547,stroke:#9A8ECD,color:#fff
+  style S6 fill:#3D3547,stroke:#9A8ECD,color:#fff
+  style Done fill:#9A8ECD,stroke:#D4B5FF,color:#1A1825
+```
+
+A harness skipping any stage is **not** ready for public support, even if it appears to work on a maintainer's machine.

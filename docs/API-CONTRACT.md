@@ -52,6 +52,27 @@ If the daemon metadata is unavailable, `daemon` may be `null`.
 
 ## Structured error envelope
 
+```mermaid
+flowchart TD
+  Req[Incoming request] --> Parse{Parse + version check}
+  Parse -- bad shape --> ErrInvalid["400 invalid_request"]
+  Parse -- unknown version --> ErrInvalid
+  Parse -- ok --> Route{Route exists?}
+  Route -- no --> ErrNotFound["404 not_found"]
+  Route -- yes --> Validate{Field validation}
+  Validate -- cwd outside root --> ErrCwd["400 project_root_violation"]
+  Validate -- unknown harness/action --> ErrInvalid
+  Validate -- ok --> Action{Resource lookup}
+  Action -- session missing --> ErrSession["404 session_not_found"]
+  Action -- session not live --> ErrLive["409 session_not_live"]
+  Action -- PTY spawn fails --> ErrPty["500 pty_spawn_failed"]
+  Action -- runtime down --> ErrRuntime["503 runtime_unavailable"]
+  Action -- internal panic --> ErrInternal["500 internal_error"]
+  Action -- ok --> Success[Documented success shape]
+
+  ErrInvalid & ErrNotFound & ErrCwd & ErrSession & ErrLive & ErrPty & ErrRuntime & ErrInternal -->|"{ error: { code, message, details } }"| Client[Client branches on code]
+```
+
 All API errors use the following stable envelope. Clients must branch on `error.code`, not `error.message`:
 
 ```json
@@ -225,6 +246,25 @@ Endpoints that return this shape:
 3. Repeat until `hasMore` is `false`.
 
 This gives clients stable incremental reads. Exactly-once delivery also requires client-side checkpointing and idempotency.
+
+```mermaid
+sequenceDiagram
+  participant Client
+  participant Daemon as /api/v1/events
+
+  Client->>Daemon: GET ?sessionId=S1
+  Daemon-->>Client: { events: [seq 1..50], nextCursor: { afterSeq: 50 }, hasMore: true }
+  Client->>Client: persist last seq = 50
+  Client->>Daemon: GET ?sessionId=S1&afterSeq=50
+  Daemon-->>Client: { events: [seq 51..78], nextCursor: { afterSeq: 78 }, hasMore: false }
+  Client->>Client: persist last seq = 78
+
+  note over Client,Daemon: Client crash + restart
+  Client->>Daemon: GET ?sessionId=S1&afterSeq=78
+  Daemon-->>Client: { events: [seq 79..82], nextCursor: { afterSeq: 82 }, hasMore: false }
+```
+
+Persisting `afterSeq` survives daemon restarts: events are append-only and seq numbers are monotonic, so a resumed poll always picks up where it stopped.
 
 ## Live control response shapes (`v1`)
 

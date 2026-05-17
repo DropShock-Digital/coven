@@ -151,6 +151,31 @@ Next:
 - Publicly document the supported plugin path once API versioning lands.
 - Add a demo showing a task moving from intake to Coven runtime to comux review.
 
+## Milestone map
+
+```mermaid
+flowchart LR
+  A["A. Local runtime foundation\n(mostly shipped)"] --> B["B. Visible cockpit foundation\n(shipped, stabilizing)"]
+  A --> C["C. Transparent community loop\n(now)"]
+  B --> D["D. Harness expansion\n(next/later)"]
+  C --> D
+  B --> E["E. Intake → runtime → review\n(next/lab)"]
+  A --> E
+  D --> F["F. Multi-harness orchestration\n(planned, phased)"]
+  E --> F
+
+  style A fill:#9A8ECD,stroke:#D4B5FF,color:#1A1825
+  style B fill:#9A8ECD,stroke:#D4B5FF,color:#1A1825
+  style C fill:#C5BDED,stroke:#D4B5FF,color:#1A1825
+  style D fill:#3D3547,stroke:#9A8ECD,color:#fff
+  style E fill:#3D3547,stroke:#9A8ECD,color:#fff
+  style F fill:#3D3547,stroke:#9A8ECD,color:#fff
+```
+
+Colour coding mirrors maturity: filled lavender is shipped or stabilising; outlined slate is next/later. Edges show prerequisite direction, not a strict schedule.
+
+> **Image asset prompt (to be generated and dropped into `docs/images/roadmap-banner.svg`):** Vector banner 2400×600, dark OpenCoven background. Six pill-shaped nodes labelled A–F (matching the milestone names above) arranged left-to-right along a soft lavender arc, with thin dashed lines connecting the prerequisite chain. A–B–C filled with `#9A8ECD`, D–E–F outlined with `#9A8ECD` and a slate fill (`#3D3547`). Header text "OpenCoven roadmap" in `DM Sans` `700`, lower-right caption "shipped → stabilizing → now → next → planned" in `Fragment Mono`.
+
 ## Public milestones
 
 ### Milestone A — Local runtime foundation

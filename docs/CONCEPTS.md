@@ -7,6 +7,25 @@ description: "Definitions for the nouns Coven uses across the CLI, daemon, API, 
 
 This page defines the nouns used across the Coven CLI, daemon, API, docs, and client integrations.
 
+```mermaid
+flowchart TB
+  OpenCoven[OpenCoven ecosystem] --> Coven[Coven runtime]
+  Coven --> Daemon[Daemon]
+  Daemon --> Project[Project root]
+  Daemon --> Cwd[Working directory]
+  Daemon --> Harness[Harness]
+  Daemon --> Session[Session]
+  Session --> Event[Event]
+  Daemon --> Store[Store / SQLite]
+  Daemon --> Socket[Socket API /api/v1]
+  Socket --> ControlPlane[Control plane]
+  ControlPlane --> Capability[Capability]
+  Socket --> Client[Client]
+  Session --> Ritual["Rituals: archive / summon / sacrifice"]
+```
+
+Every term below is one node in the graph above.
+
 ## OpenCoven
 
 OpenCoven is the ecosystem and organization around the runtime, cockpit, and integrations.

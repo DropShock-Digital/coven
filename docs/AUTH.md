@@ -19,6 +19,32 @@ The current solution is a **same-user local access model**:
 
 This is intentionally a local-first MVP posture. It is suitable for same-user local clients such as the Coven CLI/TUI, comux, OpenMeow, and the external OpenClaw plugin. It is not a remote API auth scheme.
 
+```mermaid
+flowchart LR
+  subgraph User["Same-user trust zone"]
+    direction LR
+    CLI[coven CLI / TUI]
+    Comux[comux]
+    Plugin["@opencoven/coven\nOpenClaw plugin"]
+    Other[Other same-user clients]
+  end
+
+  CLI -->|Unix socket| Socket["<covenHome>/coven.sock"]
+  Comux -->|Unix socket| Socket
+  Plugin -->|Unix socket + trust-anchor checks| Socket
+  Other -->|Unix socket| Socket
+
+  Socket --> Daemon["Rust daemon\n(authority boundary)"]
+  Daemon --> Store[("SQLite store + event log")]
+  Daemon --> PTY[Harness PTYs]
+
+  Remote((Remote network)) -.-x|"REJECTED: no TCP, no auth design"| Daemon
+  Browser((Browser tab)) -.-x|"REJECTED: no origin policy"| Daemon
+  OtherUser((Another OS user)) -.-x|"REJECTED: socket permissions"| Daemon
+```
+
+The boundary is filesystem permissions plus same-user process locality. Anything outside the dashed zone is rejected by design; introducing a remote, browser, or cross-user surface requires a separate auth design (not a tunnel of the existing socket).
+
 ## What Protects The API Today
 
 ### Unix socket locality

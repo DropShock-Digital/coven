@@ -66,6 +66,32 @@ Claude Code owns its own OAuth flow and token cache. Coven never reads Anthropic
 | Claude prompts for login | Auth not finished | `claude doctor`. |
 | Session shows long pre-flight pause | Claude resolving config | First run only; subsequent launches are fast. |
 
+## How Coven supervises Claude Code
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant C as coven CLI
+  participant D as Coven daemon
+  participant Cl as Claude PTY
+  participant An as Anthropic API
+
+  U->>C: coven run claude "refactor for clarity"
+  C->>D: POST /api/v1/sessions
+  D->>D: canonicalize root + cwd
+  D->>D: lookup adapter for "claude"
+  D->>Cl: spawn claude (prefix: --print for non-interactive, none for interactive)
+  Cl->>An: provider auth (uses Anthropic local credentials — Coven does not see)
+  An-->>Cl: model response stream + tool calls
+  Cl-->>D: stdout / exit events
+  D-->>C: SessionRecord (id, status=running)
+  C-->>U: print session id, switch to attach view
+```
+
+Claude Code's tool calls run inside the Claude process — Coven does not arbitrate them. The PTY captures their output as ordinary stdout/stderr.
+
+> **Image asset prompt (to be generated and dropped into `docs/images/harnesses-claude-launch.png`):** Render a 1600×900 split-screen mockup. Left half: a terminal showing `coven run claude "refactor for clarity"` and a live Claude attach stream. Right half: the Coven TUI session browser highlighting `claude · running · "Web refactor" · session-2` in the OpenCoven accent. Background `#1A1825`, primary `#9A8ECD`.
+
 ## Related
 
 - [Installing harness CLIs](/harnesses/installing)

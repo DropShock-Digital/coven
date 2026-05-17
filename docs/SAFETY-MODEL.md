@@ -22,6 +22,33 @@ Every client is untrusted for enforcement purposes, including:
 
 Clients may improve UX, but they must not be the only place where a sensitive decision is enforced.
 
+```mermaid
+flowchart TB
+  subgraph UntrustedZone["Untrusted for enforcement (UX layer only)"]
+    direction LR
+    CLI[coven CLI / TUI]
+    Comux[comux]
+    Meow[OpenMeow]
+    Plugin["@opencoven/coven plugin"]
+    Scripts[Scripts / other clients]
+  end
+
+  UntrustedZone -->|HTTP over Unix socket| Boundary{{Daemon authority boundary}}
+
+  subgraph TrustedZone["Trusted for enforcement"]
+    direction TB
+    Boundary --> ValidateRoot[Canonicalize projectRoot]
+    ValidateRoot --> ValidateCwd[Canonicalize cwd inside root]
+    ValidateCwd --> AllowHarness[Allowlist harness id]
+    AllowHarness --> ValidateSession[Validate session id / liveness]
+    ValidateSession --> RouteAction[Route action id via control plane]
+    RouteAction --> Spawn[Spawn argv only — never sh -c]
+    Spawn --> Store[(SQLite store + append-only events)]
+  end
+```
+
+Anything in **UntrustedZone** can lie, drift, or be replaced. Anything in **TrustedZone** is the Rust daemon's job and must fail closed on unknowns. The arrow direction is the only direction a sensitive decision is allowed to flow: from untrusted into the boundary, where it is revalidated.
+
 ## Authentication and local access
 
 Coven's current auth solution is a same-user local access model, not a network authentication protocol.

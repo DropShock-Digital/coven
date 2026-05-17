@@ -73,6 +73,32 @@ coven patch openclaw "fix Codex auth profile order after invalidated OAuth token
 | Codex prompts for login each run | Stale token | `codex login`. |
 | Session hangs at start | Codex waiting on TTY prompt | Detach with `Ctrl-]`, re-launch with `coven run` directly. |
 
+## How Coven supervises Codex
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant C as coven CLI
+  participant D as Coven daemon
+  participant Cx as Codex PTY
+  participant Op as OpenAI API
+
+  U->>C: coven run codex "audit this repo"
+  C->>D: POST /api/v1/sessions
+  D->>D: canonicalize root + cwd
+  D->>D: lookup adapter for "codex"
+  D->>Cx: spawn codex (prefix: exec --skip-git-repo-check --color never)
+  Cx->>Op: provider auth (uses ~/.codex credentials — Coven does not see)
+  Op-->>Cx: model response stream
+  Cx-->>D: stdout / exit events
+  D-->>C: SessionRecord (id, status=running)
+  C-->>U: print session id, switch to attach view
+```
+
+The dotted line worth noticing: Coven never connects to the OpenAI API itself. The credential path is **Codex CLI ↔ OpenAI**, with Coven only observing the PTY output.
+
+> **Image asset prompt (to be generated and dropped into `docs/images/harnesses-codex-launch.png`):** Render a 1600×900 split-screen mockup. Left half: a terminal showing `coven run codex "audit this repo"` followed by the live attach stream (a few wrapped lines of fake Codex output). Right half: the Coven TUI session browser showing one new entry highlighted in the OpenCoven accent (`#D4B5FF`): `codex · running · "audit this repo" · session-1`. Background `#1A1825`, primary `#9A8ECD`.
+
 ## Related
 
 - [Installing harness CLIs](/harnesses/installing)

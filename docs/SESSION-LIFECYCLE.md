@@ -19,6 +19,31 @@ The current store records session status as a string. Common states include:
 
 Archive state is stored separately as `archived_at`. A completed or failed session can be hidden from the active list without changing its final status.
 
+```mermaid
+stateDiagram-v2
+  [*] --> created: coven run / POST /sessions
+  created --> running: PTY spawn succeeds
+  created --> failed: validation fails / PTY spawn errors
+  running --> completed: harness exits 0
+  running --> failed: harness exits non-zero
+  running --> orphaned: daemon stops while running
+
+  completed --> archived: coven archive
+  failed --> archived: coven archive
+  orphaned --> archived: coven archive
+
+  archived --> completed: coven summon (was completed)
+  archived --> failed: coven summon (was failed)
+  archived --> orphaned: coven summon (was orphaned)
+
+  completed --> [*]: coven sacrifice --yes
+  failed --> [*]: coven sacrifice --yes
+  orphaned --> [*]: coven sacrifice --yes
+  archived --> [*]: coven sacrifice --yes
+```
+
+The diagram above is normative for the v0 store. `running` sessions cannot be archived or sacrificed directly — kill them or wait for exit first. `created → running` is the only transition that requires PTY spawn; every other transition is a store-only state change managed by the Rust daemon.
+
 ## Launch path
 
 The normal launch flow:
@@ -34,6 +59,40 @@ The normal launch flow:
 9. Session status and exit code are updated.
 
 The Rust layer performs the authority checks even when a TypeScript client has already validated the request for UX.
+
+```mermaid
+sequenceDiagram
+  participant Client as Client (CLI / TUI / comux / plugin)
+  participant Daemon as Coven daemon
+  participant Store as SQLite store
+  participant PTY as Harness PTY
+
+  Client->>Daemon: POST /api/v1/sessions { projectRoot, cwd, harness, prompt }
+  Daemon->>Daemon: canonicalize projectRoot
+  alt projectRoot invalid
+    Daemon-->>Client: 400 invalid_request
+  end
+  Daemon->>Daemon: canonicalize cwd inside projectRoot
+  alt cwd outside root
+    Daemon-->>Client: 400 project_root_violation
+  end
+  Daemon->>Daemon: lookup harness in adapter table
+  alt harness unknown
+    Daemon-->>Client: 400 invalid_request (with install hint)
+  end
+  Daemon->>Store: insert session (status=created)
+  Daemon->>PTY: spawn argv (prefix args + prompt)
+  alt PTY spawn fails
+    Daemon->>Store: update status=failed
+    Daemon-->>Client: 500 pty_spawn_failed
+  else PTY spawn ok
+    Daemon->>Store: update status=running
+    Daemon-->>Client: 200 SessionRecord
+    PTY-->>Store: append output / exit events
+    PTY->>Daemon: process exits with code
+    Daemon->>Store: update status=completed|failed, exit_code
+  end
+```
 
 ## Detached records
 

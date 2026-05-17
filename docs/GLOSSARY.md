@@ -5,6 +5,31 @@ description: "Definitions for Coven terms: ACP, API version, archive, capability
 
 # Glossary
 
+How the terms fit together at a glance:
+
+```mermaid
+flowchart LR
+  OpenCoven[OpenCoven] --> Coven[Coven]
+  Coven --> CLI[coven CLI / TUI]
+  Coven --> Daemon[Daemon]
+  Daemon --> Store[Store / SQLite]
+  Daemon --> SocketAPI[Socket API]
+  Daemon --> ControlPlane[Control plane]
+  ControlPlane --> Capability[Capability]
+  Daemon --> Harness[Harness]
+  Harness --> PTY[PTY]
+  Harness -.->|owns auth| Provider((Provider))
+  Daemon --> Session[Session]
+  Session --> Event[Event]
+  Session --> Ritual[Rituals: archive / summon / sacrifice]
+  Client[Client] --> SocketAPI
+  Client --> Comux[comux]
+  Client --> Plugin["@opencoven/coven (OpenClaw plugin)"]
+```
+
+Definitions follow alphabetically.
+
+
 ## ACP
 
 Agent Client Protocol. In this repo, ACP appears as an integration surface for external agent runtimes and OpenClaw compatibility. Coven itself is not an ACP implementation; the external OpenClaw plugin maps between OpenClaw runtime events and Coven sessions.

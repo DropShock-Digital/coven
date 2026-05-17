@@ -88,9 +88,46 @@ This makes the socket API the contract. Protocol versioning, compatibility tests
 
 Coven is public now while the safety model, daemon behavior, adapter contracts, and user experience continue to mature. Public packaging should stay conservative, and readiness should be judged by whether early adopters can reliably run Codex and Claude Code in visible, attachable, project-scoped sessions.
 
+## MVP scope at a glance
+
+```mermaid
+flowchart TB
+  subgraph InScope["In scope for MVP"]
+    direction TB
+    Cli["coven CLI / TUI"]
+    Doc["coven doctor"]
+    DaemonOps["Daemon lifecycle"]
+    PrjGuard["Project-root + cwd guard"]
+    Codex["Codex adapter"]
+    Claude["Claude Code adapter"]
+    Pty["PTY sessions"]
+    Store["SQLite session ledger + events"]
+    Rituals["Archive / Summon / Sacrifice"]
+    Api["/api/v1 socket API"]
+    Plugin["External @opencoven/coven plugin"]
+    Docs["Public docs and distribution"]
+  end
+
+  subgraph OutOfScope["Out of scope for MVP"]
+    direction TB
+    Marketplace["Marketplace plugins"]
+    Cloud["Cloud sync"]
+    Multi["Multi-user collaboration"]
+    Rewrite["Full comux rewrite"]
+    Bundled["Bundled OpenClaw core integration"]
+    Replace["Replacing OpenClaw"]
+  end
+
+  InScope -. revisit after MVP .-> OutOfScope
+```
+
+The boundary above is normative for v0. Anything in **OutOfScope** is recorded on the roadmap, not built into the runtime substrate.
+
 ## Canonical community handles
 
 Use these exact public handles/links when Coven docs or package metadata mention community channels:
 
 - Discord: `discord.gg/opencoven`
 - X / Twitter: `@OpenCvn`
+
+> **Image asset prompt (to be generated and dropped into `docs/images/product-spec-stack.svg`):** Vector stack diagram 1200×900, dark OpenCoven background (`#1A1825`). Four horizontal layers, bottom to top: **Local OS** (slate), **Coven daemon (Rust)** (`#9A8ECD`), **Socket API /api/v1** (`#C5BDED`), **Clients** (`#D4B5FF`) split into CLI/TUI, comux, OpenMeow, OpenClaw plugin. Above the clients, an "Intent capture → Visible work → Review/merge" arrow. To the side of the Coven daemon layer, two icons labelled "Codex PTY" and "Claude PTY" with dashed arrows pointing to their respective provider clouds outside the local boundary.

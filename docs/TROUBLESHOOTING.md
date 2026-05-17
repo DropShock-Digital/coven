@@ -13,6 +13,33 @@ coven doctor
 
 `doctor` is the fastest way to check store, project, daemon, and harness readiness.
 
+```mermaid
+flowchart TD
+  Start([Something broken?]) --> Doctor["coven doctor"]
+  Doctor --> Store{store ok?}
+  Store -- no --> CovenHome["Check $COVEN_HOME ownership + perms"]
+  Store -- yes --> Project{project ok?}
+  Project -- no --> ProjectFix["Run from inside a project tree"]
+  Project -- yes --> DaemonChk{daemon running?}
+  DaemonChk -- no --> StartDaemon["coven daemon start / restart"]
+  DaemonChk -- yes --> Harness{harness detected?}
+  Harness -- no --> InstallHarness["Install harness CLI\n(see install hint)"]
+  Harness -- yes --> RunChk{coven run works?}
+  RunChk -- no --> RunFix["Check provider auth\n(codex login / claude doctor)"]
+  RunChk -- yes --> AttachChk{attach behavior expected?}
+  AttachChk -- no --> AttachFix["Session may be archived/orphaned\nUse coven sessions --all"]
+  AttachChk -- yes --> Done([Working])
+
+  CovenHome --> Doctor
+  ProjectFix --> Doctor
+  StartDaemon --> Doctor
+  InstallHarness --> Doctor
+  RunFix --> Doctor
+  AttachFix --> Doctor
+```
+
+Follow the failing branch. Almost every issue in the rest of this page is one of these branches in detail.
+
 ## `coven` command not found
 
 If using npm:

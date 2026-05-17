@@ -7,6 +7,36 @@ description: "The Coven-side contract for making Codex and Claude Code sessions 
 
 This is the Coven-side contract for making Coven-managed Codex and Claude Code sessions visible in comux.
 
+```mermaid
+flowchart LR
+  subgraph Dev["Developer"]
+    Open[Open repo in comux]
+  end
+
+  subgraph Local["Local machine"]
+    Comux[comux cockpit]
+    CLI[coven CLI]
+    Daemon[Coven daemon]
+    PTY1[Codex PTY]
+    PTY2[Claude PTY]
+    Store[(SQLite store + events)]
+  end
+
+  Open --> Comux
+  Comux -->|discover| CLI
+  CLI -->|coven sessions --json| Daemon
+  Daemon --> Store
+  Daemon --> PTY1
+  Daemon --> PTY2
+  Comux -->|open / attach| Daemon
+  Daemon -->|/events| Comux
+  Comux --> Review[Inspect · Diff · Merge · PR]
+  Review --> Ritual[Archive · Summon · Sacrifice]
+  Ritual --> Daemon
+```
+
+The demo loop is end-to-end: comux never bypasses the daemon, and the daemon never trusts comux for project-root, harness, or destructive-deletion enforcement.
+
 ## Loop
 
 1. Open the target repository in comux.
@@ -82,3 +112,5 @@ Clients should keep their core UI usable when Coven is missing or stopped:
 ## Roadmap
 
 The broader OpenCoven roadmap remains the public tracking point for the end-to-end demo: [ROADMAP.md](/ROADMAP).
+
+> **Image asset prompt (to be generated and dropped into `docs/images/comux-demo-loop.png`):** Render a 1920×1080 split-pane mockup that mimics a comux cockpit on the OpenCoven dark palette (`#1A1825` background, `#9A8ECD` chrome). Three tmux-like panes: (1) file explorer with a fake monorepo tree, (2) live attach view streaming a fake Codex session ("Fix the failing tests"), (3) diff/review pane with a small green/red unified diff. Bottom status bar reads `coven daemon · running · 1.2 MB events · 2 active sessions`. Use `Fragment Mono`.

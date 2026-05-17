@@ -65,3 +65,35 @@ For now, keep the adapter seam able to express prefix-arg CLIs (`chat -q <prompt
 - comux attach/open has had real usage;
 - we know whether Hermes should be one-shot, interactive, or resume-aware inside Coven; and
 - we can test against a real Hermes install.
+
+## Candidate harness landscape
+
+```mermaid
+flowchart LR
+  subgraph V0["v0 (supported today)"]
+    Codex["codex\n@openai/codex"]
+    Claude["claude\n@anthropic-ai/claude-code"]
+  end
+
+  subgraph Research["Phase 1: research"]
+    Hermes["hermes\n(NousResearch)"]
+    Aider["aider"]
+    Gemini["gemini-cli\n(Google)"]
+    Cline["cline"]
+  end
+
+  subgraph Later["Later: revisit"]
+    OpenCode["opencode"]
+    Custom["user-defined custom adapter"]
+  end
+
+  V0 --> Research
+  Research --> Later
+
+  style Codex fill:#9A8ECD,stroke:#D4B5FF,color:#1A1825
+  style Claude fill:#9A8ECD,stroke:#D4B5FF,color:#1A1825
+```
+
+A candidate moves from **Phase 1: research** to public v0 support only after clearing every stage in the [Harness adapters maturity checklist](/HARNESS-ADAPTERS#suggested-adapter-maturity-stages). The grid above is directional, not a promise.
+
+> **Image asset prompt (to be generated and dropped into `docs/images/future-harnesses-landscape.svg`):** Draw a horizontal vector "lane" diagram 1600×600 on the OpenCoven dark background. Three lanes labelled **Supported v0**, **Research**, and **Later**. Lane chips: v0 = Codex, Claude Code (filled with `#9A8ECD`); Research = Hermes, Aider, Gemini CLI, Cline (filled with `#3D3547`, lavender border); Later = OpenCode, Custom (outline only). Add a thin lavender arrow above the lanes labelled "maturity gate". Use `DM Sans` for labels.

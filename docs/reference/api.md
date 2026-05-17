@@ -10,20 +10,39 @@ description: "Endpoint reference for the Coven local socket API under /api/v1: h
 
 The Coven daemon exposes its public API as HTTP over a Unix socket under `<covenHome>/coven.sock`. The active contract is **`coven.daemon.v1`** served under `/api/v1`.
 
+```mermaid
+flowchart LR
+  Root["/api/v1"] --> Version["GET /api-version"]
+  Root --> Health["GET /health"]
+  Root --> Capabilities["GET /capabilities"]
+  Root --> Actions["POST /actions"]
+  Root --> Sessions["/sessions"]
+  Root --> Events["GET /events"]
+
+  Sessions --> SList["GET /"]
+  Sessions --> SCreate["POST /"]
+  Sessions --> SById["/:id"]
+  SById --> SGet["GET /"]
+  SById --> SInput["POST /input"]
+  SById --> SKill["POST /kill"]
+```
+
 ## Endpoints
 
-| Endpoint | Page |
-|---|---|
-| `GET /api/v1/api-version` | Read the active API version and supported versions. |
-| `GET /api/v1/health` | Check daemon health, `apiVersion`, and capabilities. |
-| `GET /api/v1/capabilities` | Discover daemon/control-plane capabilities and policy hints. |
-| `POST /api/v1/actions` | Route a known policy-shaped control-plane action. |
-| `GET /api/v1/sessions` | List active sessions. |
-| `POST /api/v1/sessions` | Launch a project-scoped harness session. |
-| `GET /api/v1/sessions/:id` | Fetch one session. |
-| `POST /api/v1/sessions/:id/input` | Forward input to a live session. |
-| `POST /api/v1/sessions/:id/kill` | Kill a live session. |
-| `GET /api/v1/events` | Read paginated session events. |
+| Method | Path | Purpose | Body | Success | Errors |
+|---|---|---|---|---|---|
+| GET | `/api/v1/api-version` | Active API version + supported versions. | — | `{ apiVersion, supportedApiVersions }` | — |
+| GET | `/api/v1/health` | Daemon reachability, version, capabilities, pid. | — | `{ ok, apiVersion, covenVersion, capabilities, daemon }` | `503 runtime_unavailable` |
+| GET | `/api/v1/capabilities` | Capability catalog with policy hints. | — | `{ capabilities: [...] }` | — |
+| POST | `/api/v1/actions` | Route a known control-plane action id. | `{ action, origin, intentId, args }` | `{ ok, accepted, status, event }` | `400 invalid_request` (unknown action) |
+| GET | `/api/v1/sessions` | List active sessions. | — | `SessionRecord[]` | — |
+| POST | `/api/v1/sessions` | Launch a project-scoped harness session. | `{ projectRoot, cwd?, harness, prompt, title? }` | `SessionRecord` | `400 project_root_violation`, `400 invalid_request`, `500 pty_spawn_failed` |
+| GET | `/api/v1/sessions/:id` | Fetch one session. | — | `SessionRecord` | `404 session_not_found` |
+| POST | `/api/v1/sessions/:id/input` | Forward input to a live session. | `{ data }` | `{ ok, accepted }` | `404 session_not_found`, `409 session_not_live` |
+| POST | `/api/v1/sessions/:id/kill` | Kill a live session. | — | `{ ok, accepted }` | `404 session_not_found`, `409 session_not_live` |
+| GET | `/api/v1/events` | Read paginated session events. | — (`?sessionId`, `?afterSeq`, `?afterEventId`, `?limit`) | `{ events, nextCursor, hasMore }` | `400 invalid_request` |
+
+All error responses use the structured envelope documented in [API contract](/API-CONTRACT#structured-error-envelope).
 
 ## Always begin with health
 
@@ -37,6 +56,7 @@ See [Coven Local API](/API) for response examples and [API contract](/API-CONTRA
 
 ## Related
 
+- [Coven Local API](/API)
 - [API contract](/API-CONTRACT)
 - [Authentication and local access](/AUTH)
 - [Client integration](/CLIENT-INTEGRATION)

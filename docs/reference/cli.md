@@ -10,6 +10,42 @@ description: "Reference for the coven CLI commands: doctor, daemon, run, session
 
 The user-facing command is always `coven`. Wrapper packages like `@opencoven/cli`, `@opencoven/cli-macos`, and `@opencoven/cli-linux-x64` install the same binary.
 
+```mermaid
+flowchart TB
+  Root["coven"] --> TUI["tui (default)"]
+  Root --> Doctor["doctor"]
+  Root --> Daemon["daemon"]
+  Root --> Run["run"]
+  Root --> Sessions["sessions"]
+  Root --> Attach["attach"]
+  Root --> Summon["summon"]
+  Root --> Archive["archive"]
+  Root --> Sacrifice["sacrifice"]
+  Root --> Patch["patch"]
+  Root --> Pc["pc (macOS-first)"]
+
+  Daemon --> DStart["start"]
+  Daemon --> DStatus["status"]
+  Daemon --> DRestart["restart"]
+  Daemon --> DStop["stop"]
+
+  Run --> RCodex["codex &lt;prompt&gt;"]
+  Run --> RClaude["claude &lt;prompt&gt;"]
+
+  Sessions --> SPlain["--plain"]
+  Sessions --> SJson["--json"]
+  Sessions --> SAll["--all"]
+  Sessions --> SManage["--manage"]
+
+  Patch --> POpenclaw["openclaw &lt;prompt&gt;"]
+
+  Pc --> PcStatus["status [--json]"]
+  Pc --> PcTop["top --n N"]
+  Pc --> PcDisk["disk"]
+  Pc --> PcKill["kill &lt;pid&gt; --confirm"]
+  Pc --> PcCache["cache clear --confirm"]
+```
+
 ## Top-level
 
 | Command | Action |
@@ -27,6 +63,20 @@ The user-facing command is always `coven`. Wrapper packages like `@opencoven/cli
 | `coven patch openclaw <prompt>` | Local OpenClaw rescue loop. Does not commit or push. |
 | `coven pc` | macOS-first diagnostics and explicit `--confirm` relief operations. |
 
+## Common flags by command
+
+| Command | Flags |
+|---|---|
+| `coven run` | `--cwd <path>`, `--title <text>`, `--json`, `--detach` |
+| `coven sessions` | `--plain`, `--json`, `--all`, `--manage` |
+| `coven attach` | `--follow` (default), `--no-follow` (replay only) |
+| `coven sacrifice` | `--yes` (required) |
+| `coven daemon start` | `--coven-home <path>` (overrides `$COVEN_HOME`) |
+| `coven pc kill` | `--confirm` (required) |
+| `coven pc cache clear` | `--confirm` (required) |
+| `coven pc top` | `--n <N>`, `--verbose` |
+| `coven pc status` | `--json` |
+
 ## Flag conventions
 
 - **Project-scoped commands** accept `--cwd <path>` for a launch directory inside the project root.
@@ -34,8 +84,23 @@ The user-facing command is always `coven`. Wrapper packages like `@opencoven/cli
 - **Destructive commands** require `--yes` (or `--confirm` for `coven pc` relief).
 - **Daemon-touching commands** print install/repair hints when the socket is missing.
 
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | Success. |
+| `1` | Generic CLI error (bad argv, unknown subcommand). |
+| `2` | Validation error (outside-root cwd, unknown harness id). |
+| `3` | Daemon unavailable (socket missing or unhealthy). |
+| `4` | Destructive action refused (missing `--yes` / `--confirm`, or target is live). |
+| `>=10` | Reserved for future structured exit codes; current builds may not emit these yet. |
+
+The `coven attach` command exits with the underlying session's exit code when the session is no longer live, so scripts can pipe `coven run … && coven attach <id>` and observe the harness's own status.
+
 ## Related
 
 - [Getting started](/GETTING-STARTED)
+- [Coven TUI](/start/coven-tui)
 - [Session lifecycle](/SESSION-LIFECYCLE)
 - [Harness adapter guide](/HARNESS-ADAPTERS)
+- [Troubleshooting](/TROUBLESHOOTING)

@@ -18,6 +18,29 @@ Recommended handshake:
 3. Call `GET /api/v1/capabilities` if using control-plane actions.
 4. Use versioned `/api/v1/...` routes only.
 
+```mermaid
+sequenceDiagram
+  participant Client
+  participant Daemon
+
+  Client->>Daemon: GET /api/v1/health
+  alt daemon unreachable
+    Daemon--xClient: connection refused
+    Client->>Client: show "coven daemon start" hint
+  else apiVersion != coven.daemon.v1
+    Daemon-->>Client: 200 { apiVersion: "coven.daemon.v2" }
+    Client->>Client: show "update Coven or client" hint
+  else compatible
+    Daemon-->>Client: 200 { apiVersion: "coven.daemon.v1", capabilities }
+    Client->>Daemon: GET /api/v1/capabilities (if using actions)
+    Daemon-->>Client: capability catalog
+    Client->>Daemon: GET /api/v1/sessions ...
+    Daemon-->>Client: SessionRecord[]
+  end
+```
+
+Clients should treat the handshake as **mandatory before any other request**. Skipping it means depending on undefined response shapes from a future daemon version.
+
 ## Client responsibilities
 
 Clients may own:

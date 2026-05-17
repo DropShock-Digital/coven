@@ -9,6 +9,22 @@ _Last updated: 2026-05-09_
 
 Coven exposes a small HTTP API over the local Unix socket at `<covenHome>/coven.sock`. The Rust daemon is the authority boundary: clients may validate for UX, but the daemon still validates project roots, cwd, harness ids, session ids, input, and live-session state before acting.
 
+```mermaid
+flowchart LR
+  Client[Local client] -->|connect| Sock["<covenHome>/coven.sock"]
+  Sock -->|HTTP/1.1| Router["/api/v1 router"]
+  Router --> Health["/health"]
+  Router --> Capabilities["/capabilities"]
+  Router --> Actions["/actions"]
+  Router --> Sessions["/sessions[/:id[/input|/kill]]"]
+  Router --> Events["/events"]
+  Router --> Version["/api-version"]
+
+  Health & Capabilities & Actions & Sessions & Events & Version -->|"{ ... } or { error: { code, message, details } }"| Client
+```
+
+Every route returns either a documented success shape or the structured error envelope. Unknown routes, unknown action ids, and unknown API versions all fail closed with `invalid_request` or `not_found`.
+
 See [Authentication and local access](/AUTH) for the current auth posture. In short: the daemon API does not use OAuth, JWTs, bearer tokens, API keys, or cookies today. Access is local Unix-socket based, provider credentials stay with the harness CLIs, and any remote, browser, or TCP exposure needs a separate auth design.
 
 ## Versioning
