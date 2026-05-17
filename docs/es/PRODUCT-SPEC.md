@@ -1,6 +1,6 @@
 ---
 title: "Spec de producto de Coven"
-description: "La tesis de producto, el alcance MVP, la dirección de harness, la superficie CLI/TUI, la API del daemon y el plan de integración con OpenClaw del runtime local de agentes Coven."
+description: "Tesis de producto, alcance MVP, dirección de harness, superficie CLI/TUI y API del daemon del runtime local de agentes Coven y su integración con OpenClaw."
 ---
 
 # Spec de producto de Coven

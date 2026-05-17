@@ -1,6 +1,6 @@
 ---
 title: "Modelo de seguridad de Coven"
-description: "El límite de seguridad local-first de Coven: confía en el daemon en Rust, trata a los clientes como no confiables y mantén las credenciales del proveedor del harness fuera del runtime."
+description: "Límite local-first de Coven: el daemon en Rust es la autoridad, los clientes no son de confianza y las credenciales del proveedor del harness quedan fuera."
 ---
 
 # Modelo de seguridad de Coven

@@ -3,8 +3,8 @@ summary: "Launch, run, attach, exit, archive, summon, sacrifice — every state 
 read_when:
   - Designing a client that follows session state
   - Debugging a stuck or orphaned session
-title: "Session lifecycle"
-description: "Coven session lifecycle: pending, running, exited, archived, and sacrificed states, with the daemon transitions and socket API calls that drive each."
+title: "Session lifecycle for client developers"
+description: "Coven session states for client developers: pending, running, exited, archived, sacrificed, with the daemon transitions and socket API calls that drive each."
 ---
 
 Every Coven session moves through the same states, regardless of which harness is driving it.
