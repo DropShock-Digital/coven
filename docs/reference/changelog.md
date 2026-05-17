@@ -17,6 +17,23 @@ title: "Coven changelog and release notes"
 
 - **Release secret guard false positives.** The public-release secret guard now allows documented OpenCoven repo links and local worktree paths as benign high-entropy tokens while still flagging explicit secret patterns.
 
+## How to read this changelog
+
+```mermaid
+flowchart LR
+  Week["Weekly entry\n(YYYY-MM-DD)"] --> New["### New features"]
+  Week --> Upd["### Updates"]
+  Week --> Fix["### Bug fixes"]
+  Week --> Sec["### Security (when applicable)"]
+
+  New --> Links["Each item links to the canonical doc or PR"]
+  Upd --> Links
+  Fix --> Links
+  Sec --> Links
+```
+
+Entries are weekly, newest first. Items inside each week are grouped by category. Anything affecting the public API (CLI surface, socket routes, response shapes) also lands in [API contract](/API-CONTRACT) — the changelog is a pointer, not a substitute.
+
 ## Week of May 11, 2026
 
 ### New features
