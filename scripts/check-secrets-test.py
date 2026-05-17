@@ -113,7 +113,7 @@ class SecretGuardLockfileTests(unittest.TestCase):
 
         self.assertEqual(hits, [])
 
-    def test_advisory_links_do_not_suppress_other_high_entropy_tokens_on_same_line(self) -> None:
+    def test_high_entropy_tokens_detected_on_lines_with_advisory_links(self) -> None:
         token = "m9R3tQv7WzK2pL5nX8cF1gJ4sD6hY0aB/EuIqOwPz9RkTlVxCyNmS3HdG7fA"
         text = (
             "Resolved advisory https://github.com/advisories/GHSA-rhfx-m35p-ff5j "
