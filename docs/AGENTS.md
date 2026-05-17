@@ -1,3 +1,8 @@
+---
+title: "Coven docs authoring rules and AGENTS.md guide"
+description: "Authoring rules for the Coven docs site: editable files, frontmatter style, canonical naming, Mintlify components, and contributor workflow expectations."
+---
+
 # AGENTS.MD
 
 Source-of-truth for the Coven docs site (`docs.opencoven.ai`, eventual destination).

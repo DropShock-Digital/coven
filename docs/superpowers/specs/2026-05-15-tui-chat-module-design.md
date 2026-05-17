@@ -1,3 +1,8 @@
+---
+title: "TUI chat module carve-out design specification"
+description: "Phase-2 TUI cleanup design: decomposes the 1111-line `chat.rs` into state, view, controller, and lifecycle files via pure code motion with no behavior change."
+---
+
 # TUI Chat Module Carve-out — Design
 
 **Status:** Approved — ready for implementation plan

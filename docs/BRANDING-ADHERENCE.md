@@ -1,3 +1,8 @@
+---
+title: "OpenCoven branding adherence checklist and progress"
+description: "Tracks OpenCoven brand adherence across landing, docs, and packages: design tokens, logo usage, surface checklists, current progress, exceptions, and risks."
+---
+
 # Branding Adherence Checklist, Progress, Exceptions, and Risks
 
 **Status:** In progress

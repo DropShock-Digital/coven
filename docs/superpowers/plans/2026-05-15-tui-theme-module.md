@@ -1,3 +1,8 @@
+---
+title: "TUI theme module implementation plan for coven-cli"
+description: "Implementation plan for a shared `theme` module in coven-cli sourced from brand color tokens, with NO_COLOR support and truecolor or 256-color degradation."
+---
+
 # TUI Theme Module Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

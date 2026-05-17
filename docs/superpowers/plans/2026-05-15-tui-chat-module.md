@@ -1,3 +1,8 @@
+---
+title: "TUI chat module carve-out implementation plan"
+description: "Three-commit implementation plan that splits the 1111-line `chat.rs` into a focused `tui/` module in `coven-cli` with zero behavior changes or new dependencies."
+---
+
 # TUI Chat Module Carve-out Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

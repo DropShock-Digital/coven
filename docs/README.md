@@ -1,3 +1,8 @@
+---
+title: "OpenCoven documentation repository overview"
+description: "Overview of the OpenCoven docs repo: public app shape, curated navigation, excluded scaffold pages, local build commands, and rules for adding new pages."
+---
+
 # OpenCoven Documentation
 
 This directory contains the public Coven docs app and the broader repo-local documentation corpus.

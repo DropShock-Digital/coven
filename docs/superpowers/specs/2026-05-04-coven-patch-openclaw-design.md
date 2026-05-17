@@ -1,3 +1,8 @@
+---
+title: "Coven patch OpenClaw rescue loop design specification"
+description: "Design spec for the Coven Rescue Loop: a beginner-friendly `coven patch openclaw` workflow that repairs broken OpenClaw checkouts via Codex or Claude Code."
+---
+
 # Coven Patch OpenClaw Design
 
 Date: 2026-05-04

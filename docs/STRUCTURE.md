@@ -1,3 +1,8 @@
+---
+title: "Coven docs structure, navigation, and source layout"
+description: "How the Coven docs are organized: source layout under docs/, public navigation tabs driven by docs.json, excluded content, and the Mintlify-compatible build."
+---
+
 # Coven Documentation Structure
 
 The docs app is Mintlify-compatible, but the local build is a small static renderer driven by `docs.json`.

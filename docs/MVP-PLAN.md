@@ -1,3 +1,8 @@
+---
+title: "Coven MVP product and implementation plan"
+description: "End-to-end product and engineering plan for the Coven MVP: a Rust-first harness substrate for Codex and Claude Code with PTY sessions and a local socket API."
+---
+
 # Coven MVP Product + Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

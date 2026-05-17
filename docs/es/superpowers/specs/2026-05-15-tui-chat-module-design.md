@@ -1,3 +1,8 @@
+---
+title: "Diseño: extracción del módulo de chat TUI en coven-cli"
+description: "Especificación en español de la fase 2 de la limpieza del TUI: descompone chat.rs en estado, vista, controlador y ciclo de vida mediante motion puro del código."
+---
+
 # Extracción del módulo de chat TUI — Diseño
 
 **Estado:** Aprobado — listo para el plan de implementación

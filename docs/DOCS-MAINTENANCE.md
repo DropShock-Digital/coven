@@ -1,3 +1,8 @@
+---
+title: "Coven documentation maintenance and public-docs rules"
+description: "Maintenance rules for the public Coven docs: safe examples, canonical names, what to keep private, when to update pages, and how to handle stale content."
+---
+
 # Documentation Maintenance
 
 These rules keep the public docs useful, accurate, and free of private material.

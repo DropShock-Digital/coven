@@ -1,3 +1,8 @@
+---
+title: "Coven patch OpenClaw rescue loop implementation plan"
+description: "Implementation plan for `coven patch openclaw`: a supervised Codex or Claude Code rescue loop that repairs broken OpenClaw checkouts without committing changes."
+---
+
 # Coven Patch OpenClaw Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

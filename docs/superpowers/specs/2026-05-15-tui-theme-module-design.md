@@ -1,3 +1,8 @@
+---
+title: "TUI theme module design specification for coven-cli"
+description: "Phase-1 TUI cleanup design for a shared theme module: brand-mirrored tokens, semantic palette, cached TerminalMode resolution, and ratatui/ANSI adapters."
+---
+
 # TUI Theme Module — Design
 
 **Status:** Approved — ready for implementation plan

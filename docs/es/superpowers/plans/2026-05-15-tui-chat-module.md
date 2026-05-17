@@ -1,3 +1,8 @@
+---
+title: "Plan de implementación: módulo de chat TUI en coven-cli"
+description: "Plan en español para extraer chat.rs (1111 líneas) en un módulo tui/ dentro de coven-cli en tres commits, sin cambios de comportamiento ni nuevas dependencias."
+---
+
 # Plan de implementación de la extracción del módulo de chat TUI
 
 > **Para trabajadores agénticos:** SUBHABILIDAD REQUERIDA: Usa superpowers:subagent-driven-development (recomendado) o superpowers:executing-plans para implementar este plan tarea por tarea. Los pasos usan sintaxis de checkbox (`- [ ]`) para el seguimiento.
