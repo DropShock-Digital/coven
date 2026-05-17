@@ -2,7 +2,7 @@
   "$schema": "https://mintlify.com/docs.json",
   "name": "Coven",
   "description": "Coven is a local-first runtime for project-scoped coding-agent harness sessions, append-only events, and a versioned local socket API.",
-  "image": "/assets/opencoven-mark.svg",
+  "image": "/assets/opencoven-icon.svg",
   "theme": "mint",
   "modeToggle": {
     "default": "dark",
@@ -13,8 +13,8 @@
   },
   "backgroundImage": "/assets/background.png",
   "logo": {
-    "light": "/assets/opencoven-black.svg",
-    "dark": "/assets/opencoven-white.svg"
+    "light": "/assets/opencoven-icon.svg",
+    "dark": "/assets/opencoven-icon.svg"
   },
   "branding": {
     "colorPalette": {
@@ -39,7 +39,7 @@
       "weight": "400"
     }
   },
-  "favicon": "/assets/opencoven-mark.svg",
+  "favicon": "/assets/opencoven-icon.svg",
   "metadata": {
     "colorScheme": "light dark",
     "themeColor": "#9A8ECD"
@@ -104,7 +104,8 @@
                   "index",
                   "GETTING-STARTED",
                   "start/coven-tui",
-                  "TROUBLESHOOTING"
+                  "TROUBLESHOOTING",
+                  "help/environment"
                 ]
               },
               {
@@ -157,7 +158,8 @@
               {
                 "group": "Clients",
                 "pages": [
-                  "COMUX-DEMO-LOOP"
+                  "COMUX-DEMO-LOOP",
+                  "sessions/comux-json"
                 ]
               }
             ]
@@ -176,6 +178,7 @@
               {
                 "group": "Project",
                 "pages": [
+                  "BRAND",
                   "PRODUCT-SPEC",
                   "reference/releasing",
                   "reference/changelog"

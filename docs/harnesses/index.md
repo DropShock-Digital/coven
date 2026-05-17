@@ -17,7 +17,7 @@ A **harness** is an external coding-agent CLI that Coven can launch and supervis
   <Card title="Claude Code" href="/harnesses/claude-code" icon="brain">
     Anthropic Claude Code. Harness id `claude`.
   </Card>
-  <Card title="Future harnesses" href="/reference/future-harnesses" icon="compass">
+  <Card title="Future harnesses" href="/FUTURE-HARNESSES" icon="compass">
     Hermes, Aider, Gemini CLI, Cline — adapter direction and roadmap signals.
   </Card>
 </Columns>
@@ -77,7 +77,5 @@ If `coven doctor` reports a harness as missing, see [Installing harness CLIs](/h
 
 ## Related
 
-- [Project root](/harnesses/project-root)
-- [Working directory](/harnesses/working-directory)
-- [Harness adapters reference](/reference/harness-adapters)
-- [Adapter spec](/reference/adapter-spec)
+- [Harness adapter guide](/HARNESS-ADAPTERS)
+- [Future harness notes](/FUTURE-HARNESSES)

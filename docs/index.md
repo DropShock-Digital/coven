@@ -8,20 +8,13 @@ description: "Coven is a local-first runtime that supervises coding-agent CLIs i
 ---
 
 
-# Coven 🜨
+# Coven
 
 <p align="center">
     <img
-        src="/assets/opencoven-black.svg"
+        src="/assets/opencoven-icon.svg"
         alt="OpenCoven"
-        width="500"
-        class="dark:hidden"
-    />
-    <img
-        src="/assets/opencoven-white.svg"
-        alt="OpenCoven"
-        width="500"
-        class="hidden dark:block"
+        width="320"
     />
 </p>
 
@@ -198,5 +191,3 @@ coven daemon restart
     Current milestones, adapter direction, and public product boundaries.
   </Card>
 </Columns>
-
-
