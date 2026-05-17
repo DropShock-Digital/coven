@@ -1,6 +1,6 @@
 ---
 title: "Solución de problemas de Coven"
-description: "Diagnostica problemas de Coven como comandos coven faltantes, errores de socket del daemon, harness no encontrado, sesiones huérfanas y rechazos de raíz de proyecto."
+description: "Soluciona problemas de Coven: comandos coven faltantes, errores de socket del daemon, harness no encontrado, sesiones huérfanas y raíces de proyecto rechazadas."
 ---
 
 # Solución de problemas de Coven

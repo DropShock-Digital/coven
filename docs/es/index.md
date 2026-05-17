@@ -4,7 +4,7 @@ read_when:
   - Presentar OpenCoven y Coven a personas recién llegadas
   - Decidir si instalar Coven para trabajo local con agentes
 title: "Coven"
-description: "Coven es un runtime local-first que supervisa CLIs de agentes de codificación en sesiones limitadas al proyecto con eventos append-only y una API por socket local."
+description: "Coven es un runtime local-first que supervisa CLIs de agentes de codificación en sesiones por proyecto con eventos append-only y API por socket local tipada."
 ---
 
 

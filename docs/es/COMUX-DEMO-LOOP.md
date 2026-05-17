@@ -1,6 +1,6 @@
 ---
 title: "Bucle de demo de comux y Coven"
-description: "El contrato del lado de Coven para hacer que las sesiones de Codex y Claude Code sean descubribles como paneles visibles de comux a través de la API por socket local."
+description: "Contrato de Coven para exponer sesiones de Codex y Claude Code como paneles descubribles desde comux mediante la API por socket local."
 ---
 
 # Bucle de demo comux + Coven

@@ -4,7 +4,7 @@ summary: "Cómo se componen el daemon en Rust, la CLI, la TUI, el cockpit comux 
 read_when:
   - Entender la topología del runtime de Coven
   - Diseñar un cliente alrededor de la API por socket local
-description: "Cómo se componen el daemon en Rust, la CLI, la TUI, el cockpit comux y el plugin OpenClaw de Coven alrededor de la API por socket local, los adaptadores PTY y el almacén de eventos."
+description: "Topología del runtime Coven: daemon en Rust, CLI, TUI, comux y OpenClaw alrededor de la API por socket local, los adaptadores PTY y el almacén de eventos."
 ---
 
 # Arquitectura de Coven

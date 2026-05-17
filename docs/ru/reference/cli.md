@@ -4,7 +4,7 @@ read_when:
   - Поиск флага CLI Coven
   - Скриптинг против CLI Coven
 title: "Справочник CLI Coven"
-description: "Справочник команд CLI coven: doctor, daemon, run, sessions, attach, archive, kill, summon, sacrifice, view и флаги команды TUI."
+description: "Справочник команд CLI coven: doctor, daemon, run, sessions, attach, archive, kill, summon, sacrifice и view, плюс флаги TUI и команд автоматизации."
 ---
 
 

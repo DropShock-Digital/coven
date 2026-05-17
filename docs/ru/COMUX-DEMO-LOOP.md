@@ -1,6 +1,6 @@
 ---
 title: "Демо-цикл comux и Coven"
-description: "Контракт со стороны Coven для того, чтобы сделать сессии Codex и Claude Code, управляемые Coven, обнаруживаемыми как видимые панели comux через локальный socket API."
+description: "Контракт Coven, который делает сессии Codex и Claude Code обнаруживаемыми как видимые панели comux через локальный socket API демона."
 ---
 
 # Демо-цикл comux + Coven

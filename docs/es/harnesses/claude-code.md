@@ -4,7 +4,7 @@ read_when:
   - Configurar Claude Code para Coven
   - Diagnosticar fallos específicos de Claude
 title: "Harness de Claude Code"
-description: "Ejecuta la CLI de Anthropic Claude Code bajo supervisión de Coven con id de harness claude, un PTY limitado al proyecto y los flujos estándar de attach y ritual."
+description: "Ejecuta la CLI de Anthropic Claude Code bajo Coven con harness id claude, un PTY limitado al proyecto y los flujos estándar de attach y ritual."
 ---
 
 

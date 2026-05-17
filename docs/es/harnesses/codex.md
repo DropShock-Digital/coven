@@ -4,7 +4,7 @@ read_when:
   - Configurar Codex para Coven
   - Diagnosticar fallos específicos de Codex
 title: "Harness de Codex"
-description: "Ejecuta la CLI de OpenAI Codex bajo supervisión de Coven con id de harness codex, un PTY limitado al proyecto y los flujos habituales de sesión, attach y ritual."
+description: "Ejecuta la CLI de OpenAI Codex bajo Coven con harness id codex, un PTY limitado al proyecto y los flujos habituales de sesión, attach y ritual."
 ---
 
 
