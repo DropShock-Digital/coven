@@ -208,7 +208,7 @@ function renderSteps(markdown) {
     const steps = body.replace(/<Step\b([^>]*)>(?:\r?\n)?([\s\S]*?)(?:\r?\n)?<\/Step>/g, (_step, rawAttrs, stepBody) => {
       const attrs = readAttrs(rawAttrs);
       const title = escapeHtml(attrs.title || 'Step');
-      return `<li class="doc-step"><div class="doc-step-body"><h3>${title}</h3>${renderInnerMarkdown(stepBody)}</div></li>`;
+      return `<li class="doc-step"><div class="doc-step-body"><h3 data-toc="false">${title}</h3>${renderInnerMarkdown(stepBody)}</div></li>`;
     });
 
     return `<ol class="doc-steps">${steps}</ol>`;
@@ -220,7 +220,7 @@ function renderTabs(markdown) {
     const tabs = body.replace(/<Tab\b([^>]*)>(?:\r?\n)?([\s\S]*?)(?:\r?\n)?<\/Tab>/g, (_tab, rawAttrs, tabBody) => {
       const attrs = readAttrs(rawAttrs);
       const title = escapeHtml(attrs.title || 'Tab');
-      return `<section class="doc-tab"><h3>${title}</h3>${renderInnerMarkdown(tabBody)}</section>`;
+      return `<section class="doc-tab"><h3 data-toc="false">${title}</h3>${renderInnerMarkdown(tabBody)}</section>`;
     });
 
     return `<div class="doc-tabs">${tabs}</div>`;
@@ -242,6 +242,42 @@ function renderMintlifyBlocks(markdown) {
   return rendered;
 }
 
+function decodeHtml(value) {
+  return String(value)
+    .replaceAll('&amp;', '&')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'");
+}
+
+function stripTags(value) {
+  return decodeHtml(String(value).replace(/<[^>]*>/g, '')).replace(/\s+/g, ' ').trim();
+}
+
+function collectToc(html) {
+  const toc = [];
+  const headingPattern = /<h([23])\b([^>]*)>([\s\S]*?)<\/h\1>/g;
+  let match;
+
+  while ((match = headingPattern.exec(html))) {
+    const level = Number(match[1]);
+    const attrs = readAttrs(match[2]);
+    if (!attrs.id || attrs['data-toc'] === 'false') continue;
+
+    const title = stripTags(match[3]);
+    if (!title) continue;
+
+    toc.push({
+      id: attrs.id,
+      level,
+      title
+    });
+  }
+
+  return toc;
+}
+
 function processPage(page) {
   const markdownPath = pageToMarkdownPath(page);
   const raw = fs.readFileSync(markdownPath, 'utf8');
@@ -251,8 +287,9 @@ function processPage(page) {
   const title = data.title || firstHeading(content) || 'Untitled';
   const description = data.description || data.summary || firstParagraph(content) || '';
   const html = md.render(renderMintlifyBlocks(content));
+  const toc = collectToc(html);
 
-  return { page, title, description, html, url: pageUrl(page), hasH1: /^#\s+.+$/m.test(content) };
+  return { page, title, description, html, toc, url: pageUrl(page), hasH1: /^#\s+.+$/m.test(content) };
 }
 
 function renderNavList(entries, currentUrl) {
@@ -317,6 +354,22 @@ function renderPageNav(doc, entries) {
   </nav>`;
 }
 
+function renderToc(toc) {
+  if (!toc.length) return '';
+
+  return `<aside class="toc-sidebar" aria-label="On this page">
+    <p>On this page</p>
+    <nav>
+      ${toc
+        .map(
+          (item) =>
+            `<a class="toc-link toc-link-level-${item.level}" href="#${escapeAttr(item.id)}">${escapeHtml(item.title)}</a>`
+        )
+        .join('')}
+    </nav>
+  </aside>`;
+}
+
 function languageForPage(page) {
   if (page.startsWith('es/')) return 'es';
   if (page.startsWith('ru/')) return 'ru';
@@ -336,7 +389,7 @@ function renderPage(doc, entries) {
   <link rel="stylesheet" href="/style.css">
   <script src="/sidebar-nav.js" defer></script>
 </head>
-<body>
+<body${doc.toc.length ? ' class="has-toc"' : ''}>
   <header class="site-header">
     <div class="header-left">
       <button class="sidebar-trigger" type="button" aria-label="Toggle docs navigation" aria-controls="docs-sidebar" aria-expanded="true" data-sidebar-trigger>
@@ -365,6 +418,7 @@ function renderPage(doc, entries) {
 ${doc.html}
       ${renderPageNav(doc, entries)}
     </main>
+    ${renderToc(doc.toc)}
   </div>
 </body>
 </html>`;

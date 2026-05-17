@@ -13,18 +13,23 @@
  */
 
 :root {
-  --oc-bg: #fafbfd;
-  --oc-bg-subtle: #f3f1f8;
-  --oc-surface: #ffffff;
-  --oc-text: #1a1825;
-  --oc-muted: #5f596f;
-  --oc-border: #d9d3e8;
+  --oc-bg: #000000;
+  --oc-bg-subtle: #0f0a14;
+  --oc-surface: #0f0a14;
+  --oc-text: #fbfaff;
+  --oc-muted: rgba(255, 255, 255, 0.68);
+  --oc-border: #2a2438;
   --oc-primary: #9a8ecd;
-  --oc-primary-dark: #7a6daa;
+  --oc-primary-dark: #c5bded;
   --oc-accent: #d4b5ff;
-  --oc-code-bg: #171421;
-  --oc-code-text: #f5f2ff;
-  color-scheme: light;
+  --oc-code-bg: #050308;
+  --oc-code-text: #f6f3ff;
+  --oc-page-max: 1640px;
+  --oc-sidebar-width: clamp(232px, 18vw, 296px);
+  --oc-toc-width: clamp(184px, 14vw, 236px);
+  --oc-layout-gap: clamp(20px, 2.4vw, 38px);
+  --oc-content-max: 82ch;
+  color-scheme: dark;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -54,7 +59,7 @@ html {
 body {
   margin: 0;
   background:
-    linear-gradient(180deg, color-mix(in oklab, var(--oc-primary) 8%, transparent), transparent 260px),
+    linear-gradient(180deg, color-mix(in oklab, var(--oc-primary) 4%, transparent), transparent 260px),
     var(--oc-bg);
   color: var(--oc-text);
   font-family: "Fragment Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -77,20 +82,6 @@ img,
 svg,
 iframe {
   max-width: 100%;
-}
-
-.hidden {
-  display: none !important;
-}
-
-@media (prefers-color-scheme: dark) {
-  .dark\:hidden {
-    display: none !important;
-  }
-
-  .dark\:block {
-    display: block !important;
-  }
 }
 
 .doc-content p[align="center"] img {
@@ -240,7 +231,7 @@ iframe {
 
 .docs-layout {
   display: block;
-  width: min(100%, 1240px);
+  width: min(100%, var(--oc-page-max));
   margin: 0 auto;
   padding: 16px;
 }
@@ -271,9 +262,45 @@ body.sidebar-open {
 
 .doc-content {
   min-width: 0;
-  max-width: 82ch;
+  max-width: var(--oc-content-max);
   margin: 0 auto;
   padding: 22px 0 56px;
+}
+
+.toc-sidebar {
+  display: none;
+}
+
+.toc-sidebar p {
+  margin: 0 0 10px;
+  color: var(--oc-text);
+  font-family: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.toc-sidebar nav {
+  display: grid;
+  gap: 2px;
+}
+
+.toc-link {
+  display: block;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--oc-muted);
+  font-size: 12px;
+  line-height: 1.35;
+  text-decoration: none;
+}
+
+.toc-link-level-3 {
+  padding-left: 18px;
+}
+
+.toc-link:hover {
+  background: color-mix(in oklab, var(--oc-primary) 9%, transparent);
+  color: var(--oc-text);
 }
 
 .doc-content h1,
@@ -592,8 +619,10 @@ a.doc-card:hover {
 @media (min-width: 860px) {
   .docs-layout {
     display: grid;
-    grid-template-columns: 280px minmax(0, 1fr);
-    gap: 36px;
+    grid-template-columns: var(--oc-sidebar-width) minmax(0, var(--oc-content-max));
+    justify-content: center;
+    gap: var(--oc-layout-gap);
+    align-items: start;
     padding: 28px 24px 64px;
   }
 
@@ -619,8 +648,8 @@ a.doc-card:hover {
   }
 
   body.sidebar-collapsed .docs-layout {
-    grid-template-columns: minmax(0, 1fr);
-    width: min(100%, 980px);
+    grid-template-columns: minmax(0, min(100%, 92ch));
+    justify-content: center;
   }
 
   body.sidebar-collapsed .sidebar {
@@ -639,6 +668,121 @@ a.doc-card:hover {
 @media (min-width: 1120px) {
   .doc-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 1280px) {
+  body.has-toc .docs-layout {
+    grid-template-columns: minmax(0, var(--content-grid, var(--oc-content-max))) var(--oc-toc-width);
+  }
+
+  body.has-toc:not(.sidebar-collapsed) .docs-layout {
+    grid-template-columns: var(--oc-sidebar-width) minmax(0, var(--oc-content-max)) var(--oc-toc-width);
+  }
+
+  .toc-sidebar {
+    position: sticky;
+    top: 88px;
+    display: block;
+    align-self: start;
+    max-height: calc(100vh - 110px);
+    overflow: auto;
+    padding: 8px 0 8px 14px;
+    border-left: 1px solid var(--oc-border);
+  }
+}
+
+/*
+ * Mintlify-hosted docs use stable IDs for the same regions. Keep this section
+ * ID-based so it can coexist with Mintlify's generated utility classes.
+ */
+#background-color {
+  background: var(--oc-bg);
+}
+
+#navbar {
+  border-bottom-color: var(--oc-border);
+  background: color-mix(in oklab, var(--oc-bg) 94%, transparent);
+  backdrop-filter: blur(14px);
+}
+
+#content-area,
+#content {
+  min-width: 0;
+}
+
+#content {
+  max-width: var(--oc-content-max);
+}
+
+.oc-sidebar-trigger {
+  display: none;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 38px;
+  margin-right: 8px;
+  border: 1px solid var(--oc-border);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--oc-surface) 74%, transparent);
+  color: var(--oc-text);
+  cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background 160ms ease,
+    box-shadow 160ms ease;
+}
+
+.oc-sidebar-trigger:hover,
+.oc-sidebar-trigger[aria-expanded="true"] {
+  border-color: color-mix(in oklab, var(--oc-primary) 55%, var(--oc-border));
+  background: color-mix(in oklab, var(--oc-primary) 10%, var(--oc-surface));
+  box-shadow: 0 0 26px rgba(154, 142, 205, 0.18);
+}
+
+.oc-sidebar-trigger-icon {
+  display: grid;
+  gap: 4px;
+  width: 17px;
+}
+
+.oc-sidebar-trigger-icon span {
+  display: block;
+  height: 2px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+@media (min-width: 1024px) {
+  .oc-sidebar-trigger {
+    display: inline-grid;
+  }
+
+  #sidebar {
+    display: block;
+    width: var(--oc-sidebar-width);
+    border-right-color: var(--oc-border);
+    background: color-mix(in oklab, var(--oc-surface) 90%, transparent);
+  }
+
+  body.oc-sidebar-collapsed #sidebar {
+    display: none;
+  }
+}
+
+@media (min-width: 1280px) {
+  #body-content {
+    max-width: min(100vw - 48px, var(--oc-page-max));
+    margin-inline: auto;
+  }
+
+  #content-area {
+    max-width: min(100%, 88ch);
+  }
+
+  #table-of-contents,
+  #table-of-contents-layout {
+    width: var(--oc-toc-width);
   }
 }
 

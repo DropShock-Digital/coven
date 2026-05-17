@@ -177,6 +177,11 @@ assertFile(path.join(distDir, 'manifest.json'), 'manifest.json');
 assertFile(path.join(distDir, 'style.css'), 'style.css');
 assertFile(path.join(distDir, 'assets', 'opencoven-icon.svg'), 'opencoven-icon.svg');
 
+const siteCss = fs.readFileSync(path.join(rootDir, 'style.css'), 'utf8');
+if (/(^|\n)\s*\.hidden\s*\{/.test(siteCss) || /\.dark\\:hidden/.test(siteCss)) {
+  throw new Error('style.css must not globally override Mintlify responsive utility classes');
+}
+
 const searchIndex = JSON.parse(fs.readFileSync(path.join(distDir, 'search-index.json'), 'utf8'));
 if (searchIndex.length !== pages.length) {
   throw new Error(`search-index.json has ${searchIndex.length} entries, expected ${pages.length}`);
@@ -217,6 +222,9 @@ for (const page of pages) {
   validateFrontmatter(page, markdown);
   if (!/<h1\b/.test(html)) {
     throw new Error(`${page} emitted no h1`);
+  }
+  if (page === 'index' && !/class="toc-sidebar"/.test(html)) {
+    throw new Error(`${page} emitted no dynamic table of contents`);
   }
   if (publicPlaceholderPattern.test(markdown)) {
     throw new Error(`${page} contains placeholder or unsituated copy`);
