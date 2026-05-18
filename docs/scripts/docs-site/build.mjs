@@ -252,10 +252,24 @@ function decodeHtml(value) {
 }
 
 function stripTags(value) {
-  return decodeHtml(String(value))
-    .replace(/[<>]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
+  const decoded = decodeHtml(String(value));
+  let result = '';
+  let inTag = false;
+  for (let i = 0; i < decoded.length; i++) {
+    const ch = decoded[i];
+    if (ch === '<') {
+      inTag = true;
+    } else if (ch === '>') {
+      if (inTag) {
+        inTag = false;
+      } else {
+        result += ch;
+      }
+    } else if (!inTag) {
+      result += ch;
+    }
+  }
+  return result.replace(/\s+/g, ' ').trim();
 }
 
 function collectToc(html) {
