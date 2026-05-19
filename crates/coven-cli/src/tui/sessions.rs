@@ -531,14 +531,25 @@ pub(crate) fn session_browser_session_row_to_index(
     (index < displayed_count && index < total_count).then_some(index)
 }
 
+const SESSION_BROWSER_ROWS_BEFORE_SELECTED_SECTION: usize = 4;
+const SESSION_BROWSER_ROWS_AFTER_SELECTED_SECTION: usize = 4;
+
+fn session_browser_first_action_row(displayed_count: usize, has_more_sessions: bool) -> usize {
+    let more_sessions_row_count = usize::from(has_more_sessions);
+    SESSION_BROWSER_FIRST_SESSION_ROW
+        + displayed_count
+        + more_sessions_row_count
+        + SESSION_BROWSER_ROWS_BEFORE_SELECTED_SECTION
+        + SESSION_BROWSER_ROWS_AFTER_SELECTED_SECTION
+}
+
 pub(crate) fn session_browser_action_row_to_index(
     row: usize,
     displayed_count: usize,
     has_more_sessions: bool,
     action_count: usize,
 ) -> Option<usize> {
-    let extra_rows = usize::from(has_more_sessions);
-    let first_action_row = SESSION_BROWSER_FIRST_SESSION_ROW + displayed_count + extra_rows + 8;
+    let first_action_row = session_browser_first_action_row(displayed_count, has_more_sessions);
     let index = row.checked_sub(first_action_row)?;
     (index < action_count).then_some(index)
 }
