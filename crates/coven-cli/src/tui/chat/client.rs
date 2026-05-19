@@ -115,7 +115,7 @@ impl ChatClient for DaemonChatClient {
     }
 
     fn list_events(&mut self, query: ChatEventQuery<'_>) -> Result<Vec<store::EventRecord>> {
-        let mut path = format!("/events?sessionId={}", query.session_id);
+        let mut path = format!("/api/v1/events?sessionId={}", query.session_id);
         if let Some(after_seq) = query.after_seq {
             path.push_str(&format!("&afterSeq={after_seq}"));
         }
