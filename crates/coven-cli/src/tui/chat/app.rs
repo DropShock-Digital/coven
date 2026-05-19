@@ -649,8 +649,9 @@ fn timestamp_now() -> String {
 
 fn split_first_arg(input: &str) -> Option<(&str, &str)> {
     let trimmed = input.trim();
-    let (first, rest) = trimmed.split_once(char::is_whitespace)?;
-    let rest = rest.trim();
+    let split_idx = trimmed.find(char::is_whitespace)?;
+    let first = &trimmed[..split_idx];
+    let rest = trimmed[split_idx..].trim();
     (!first.is_empty() && !rest.is_empty()).then_some((first, rest))
 }
 
