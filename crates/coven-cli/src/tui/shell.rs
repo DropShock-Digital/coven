@@ -858,14 +858,8 @@ fn attach_via_daemon(
     // the summary themselves, so showing it again would only echo the exit
     // line we already printed.
     if !is_live {
-        let history = client.list_events(ChatEventQuery {
-            session_id: &session.id,
-            after_seq: None,
-            limit: None,
-        })?;
-        if let Some(note) = cast::find_cast_summary(&history).and_then(|s| format_summary_note(&s))
-        {
-            notes.push(note);
+        if let Some(note) = replayed_summary_note.as_ref() {
+            notes.push(note.clone());
         }
     }
 
