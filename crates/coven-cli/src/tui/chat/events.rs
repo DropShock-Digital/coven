@@ -5,7 +5,7 @@ use std::io::Stdout;
 use std::time::Duration;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
 
 use super::app::{App, InputMode, SlashCommandResult};
@@ -22,6 +22,21 @@ pub(super) fn run_event_loop(
         if event::poll(Duration::from_millis(100))? {
             match event::read()? {
                 Event::Key(key) => {
+                    if key.kind != KeyEventKind::Press {
+                        continue;
+                    }
+
+                    if app.show_session_overlay {
+                        match key.code {
+                            KeyCode::Esc | KeyCode::Char('q') => {
+                                app.show_session_overlay = false;
+                            }
+                            KeyCode::Char('r') => app.refresh_sessions(),
+                            _ => {}
+                        }
+                        continue;
+                    }
+
                     if app.input_mode == InputMode::AgentSelect {
                         match key.code {
                             KeyCode::Up if app.agent_select_index > 0 => {
@@ -53,6 +68,9 @@ pub(super) fn run_event_loop(
                     }
 
                     match key.code {
+                        KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                            app.insert_newline();
+                        }
                         KeyCode::Enter => match app.handle_input() {
                             Some(SlashCommandResult::Quit) => return Ok(()),
                             Some(SlashCommandResult::Unknown(cmd)) => {
@@ -62,6 +80,12 @@ pub(super) fn run_event_loop(
                         },
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(());
+                        }
+                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            return Ok(());
+                        }
+                        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.show_help = !app.show_help;
                         }
                         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             app.delete_word_before_cursor();
@@ -97,6 +121,12 @@ pub(super) fn run_event_loop(
                         KeyCode::End => {
                             app.move_cursor_end();
                         }
+                        KeyCode::Up if !app.input_history.is_empty() => {
+                            app.history_previous();
+                        }
+                        KeyCode::Down if app.history_index.is_some() => {
+                            app.history_next();
+                        }
                         KeyCode::PageUp => {
                             let page = terminal.size()?.height.saturating_sub(6) as usize;
                             app.scroll_offset = app.scroll_offset.saturating_sub(page);
@@ -127,6 +157,9 @@ pub(super) fn run_event_loop(
                 }
                 Event::Resize(..) => {
                     // Terminal will redraw on next loop
+                }
+                Event::Paste(value) => {
+                    app.insert_str(&value);
                 }
                 _ => {}
             }

@@ -8,15 +8,6 @@ use std::time::Duration;
 use anyhow::{anyhow, Context, Result};
 use chrono::{SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
-use crossterm::{
-    cursor::MoveTo,
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
-        MouseEventKind,
-    },
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, Clear, ClearType},
-};
 use uuid::Uuid;
 
 mod api;
@@ -39,7 +30,6 @@ const DEFAULT_SESSION_STATUS: &str = "created";
 const RUNNING_SESSION_STATUS: &str = "running";
 const FAILED_SESSION_STATUS: &str = "failed";
 const DEFAULT_TITLE_CHARS: usize = 48;
-const PLAIN_SESSION_ID_COLUMN_WIDTH: usize = 36;
 
 #[derive(Parser, Debug)]
 #[command(name = "coven")]
@@ -147,9 +137,9 @@ enum DaemonCommand {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        None => run_magical_tui(),
+        None => tui::shell::run(),
         Some(Command::Chat) => tui::chat::run_chat(),
-        Some(Command::Tui) => run_magical_tui(),
+        Some(Command::Tui) => tui::shell::run(),
         Some(Command::Doctor) => run_doctor(),
         Some(Command::Daemon { command }) => run_daemon_command(command),
         Some(Command::Run {
@@ -164,1104 +154,13 @@ fn main() -> Result<()> {
             manage,
             plain,
             json,
-        }) => run_sessions_command(all, manage, plain, json),
+        }) => tui::sessions::run_command(all, manage, plain, json),
         Some(Command::Attach { session_id }) => attach_session(&session_id),
         Some(Command::Summon { session_id }) => summon_session_command(&session_id),
         Some(Command::Archive { session_id }) => archive_session_command(&session_id),
         Some(Command::Sacrifice { session_id, yes }) => sacrifice_session_command(&session_id, yes),
         Some(Command::Patch { command }) => run_patch_command(command),
         Some(Command::Pc { command }) => pc::run_pc_command(command),
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MagicalTuiAction {
-    StartHere,
-    Help,
-    OpenTui,
-    Doctor,
-    DaemonStatus,
-    RunHarness,
-    PatchOpenClaw,
-    Sessions,
-    AllSessions,
-    AttachSession,
-    SummonSession,
-    ArchiveSession,
-    SacrificeSession,
-    Quit,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum MagicalTuiRequest {
-    Action(MagicalTuiAction),
-    NaturalPrompt(String),
-    HarnessPrompt { harness: String, prompt: String },
-    AttachSession(String),
-    SummonSession(String),
-    ArchiveSession(String),
-    SacrificeSession(String),
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum MagicalTuiMove {
-    Up,
-    Down,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SessionBrowserMove {
-    Up,
-    Down,
-    PreviousAction,
-    NextAction,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SessionBrowserActionKind {
-    Attach,
-    Summon,
-    Archive,
-    Sacrifice,
-    Back,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SessionsCommandMode {
-    Browser,
-    List,
-    Json,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct SessionBrowserAction {
-    key: &'static str,
-    label: &'static str,
-    help: &'static str,
-    kind: SessionBrowserActionKind,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct MagicalTuiItem {
-    key: &'static str,
-    slash: &'static str,
-    label: &'static str,
-    description: &'static str,
-    command: &'static str,
-    action: MagicalTuiAction,
-}
-
-const MAGICAL_TUI_DEFAULT_INNER_WIDTH: usize = 76;
-const MAGICAL_TUI_MAX_INNER_WIDTH: usize = 96;
-const MAGICAL_TUI_MIN_INNER_WIDTH: usize = 40;
-const SESSION_BROWSER_FIRST_SESSION_ROW: usize = 5;
-const SESSION_BROWSER_MAX_VISIBLE_SESSIONS: usize = 8;
-
-fn magical_tui_items() -> &'static [MagicalTuiItem] {
-    &[
-        MagicalTuiItem {
-            key: "1",
-            slash: "/start",
-            label: "Start here",
-            description: "Setup check and a safe first command",
-            command: "coven doctor",
-            action: MagicalTuiAction::StartHere,
-        },
-        MagicalTuiItem {
-            key: "h",
-            slash: "/help",
-            label: "Help",
-            description: "Show natural-language and slash-command examples",
-            command: "type a task or /run codex <task>",
-            action: MagicalTuiAction::Help,
-        },
-        MagicalTuiItem {
-            key: "0",
-            slash: "/tui",
-            label: "Open TUI",
-            description: "Launch this slash-command palette explicitly",
-            command: "coven tui",
-            action: MagicalTuiAction::OpenTui,
-        },
-        MagicalTuiItem {
-            key: "2",
-            slash: "/doctor",
-            label: "Doctor",
-            description: "Check store, project, and harness readiness",
-            command: "coven doctor",
-            action: MagicalTuiAction::Doctor,
-        },
-        MagicalTuiItem {
-            key: "3",
-            slash: "/daemon",
-            label: "Daemon status",
-            description: "See whether the local Coven daemon is awake",
-            command: "coven daemon status",
-            action: MagicalTuiAction::DaemonStatus,
-        },
-        MagicalTuiItem {
-            key: "4",
-            slash: "/run",
-            label: "Run an agent",
-            description: "Launch Codex or Claude Code inside this project",
-            command: "coven run codex \"fix the failing tests\"",
-            action: MagicalTuiAction::RunHarness,
-        },
-        MagicalTuiItem {
-            key: "5",
-            slash: "/patch",
-            label: "Patch OpenClaw",
-            description: "Guided repair room for a local OpenClaw checkout",
-            command: "coven patch openclaw",
-            action: MagicalTuiAction::PatchOpenClaw,
-        },
-        MagicalTuiItem {
-            key: "6",
-            slash: "/sessions",
-            label: "Active sessions",
-            description: "List live, non-archived Coven sessions",
-            command: "coven sessions --manage",
-            action: MagicalTuiAction::Sessions,
-        },
-        MagicalTuiItem {
-            key: "7",
-            slash: "/all",
-            label: "All sessions",
-            description: "List active and archived sessions together",
-            command: "coven sessions --all --manage",
-            action: MagicalTuiAction::AllSessions,
-        },
-        MagicalTuiItem {
-            key: "8",
-            slash: "/attach",
-            label: "Attach session",
-            description: "Replay/follow a session by id",
-            command: "coven attach <session-id>",
-            action: MagicalTuiAction::AttachSession,
-        },
-        MagicalTuiItem {
-            key: "9",
-            slash: "/summon",
-            label: "Summon session",
-            description: "Restore an archived session, then follow it",
-            command: "coven summon <session-id>",
-            action: MagicalTuiAction::SummonSession,
-        },
-        MagicalTuiItem {
-            key: "a",
-            slash: "/archive",
-            label: "Archive session",
-            description: "Hide completed work without deleting events",
-            command: "coven archive <session-id>",
-            action: MagicalTuiAction::ArchiveSession,
-        },
-        MagicalTuiItem {
-            key: "x",
-            slash: "/sacrifice",
-            label: "Sacrifice session",
-            description: "Permanently delete a non-running session",
-            command: "coven sacrifice <session-id> --yes",
-            action: MagicalTuiAction::SacrificeSession,
-        },
-        MagicalTuiItem {
-            key: "q",
-            slash: "/quit",
-            label: "Quit",
-            description: "Exit without changing anything",
-            command: "q",
-            action: MagicalTuiAction::Quit,
-        },
-    ]
-}
-
-fn run_magical_tui() -> Result<()> {
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        println!("{}", render_magical_tui_frame_plain(0));
-        println!("\nTip: run `coven tui` in a terminal, type a task, then press Enter.");
-        return Ok(());
-    }
-
-    let mut selection = 0;
-    let mut input = String::new();
-    enable_raw_mode().context("failed to enter Coven's magical terminal mode")?;
-    let request = loop {
-        execute!(io::stdout(), Clear(ClearType::All), MoveTo(0, 0))
-            .context("failed to redraw Coven menu")?;
-        print!(
-            "{}",
-            render_magical_tui_frame_for_raw_terminal(selection, &input)
-        );
-        io::stdout().flush().context("failed to flush Coven menu")?;
-
-        if let Event::Key(key) = event::read().context("failed to read Coven menu input")? {
-            if !is_key_press(key.kind) {
-                continue;
-            }
-            match key.code {
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    break Ok(MagicalTuiRequest::Action(MagicalTuiAction::Quit));
-                }
-                KeyCode::Up => {
-                    selection = move_magical_tui_selection(selection, MagicalTuiMove::Up);
-                }
-                KeyCode::Down => {
-                    selection = move_magical_tui_selection(selection, MagicalTuiMove::Down);
-                }
-                KeyCode::Backspace => {
-                    input.pop();
-                }
-                KeyCode::Enter => {
-                    if input.trim().is_empty() {
-                        break Ok(MagicalTuiRequest::Action(
-                            magical_tui_items()[selection].action,
-                        ));
-                    }
-                    break parse_magical_tui_input(&input);
-                }
-                KeyCode::Char(value) => {
-                    input.push(value);
-                }
-                KeyCode::Esc => break Ok(MagicalTuiRequest::Action(MagicalTuiAction::Quit)),
-                _ => {}
-            }
-        }
-    };
-    disable_raw_mode().context("failed to leave Coven's magical terminal mode")?;
-    println!();
-
-    run_magical_tui_request(request?)
-}
-
-fn run_magical_tui_request(request: MagicalTuiRequest) -> Result<()> {
-    match request {
-        MagicalTuiRequest::Action(action) => run_magical_tui_action(action),
-        MagicalTuiRequest::NaturalPrompt(prompt) => run_default_prompt_session(&prompt),
-        MagicalTuiRequest::HarnessPrompt { harness, prompt } => {
-            run_session(&harness, &[prompt], None, None, false)
-        }
-        MagicalTuiRequest::AttachSession(session_id) => attach_session(&session_id),
-        MagicalTuiRequest::SummonSession(session_id) => summon_session_command(&session_id),
-        MagicalTuiRequest::ArchiveSession(session_id) => archive_session_command(&session_id),
-        MagicalTuiRequest::SacrificeSession(session_id) => {
-            sacrifice_session_command(&session_id, false)
-        }
-    }
-}
-
-fn run_magical_tui_action(action: MagicalTuiAction) -> Result<()> {
-    match action {
-        MagicalTuiAction::StartHere => run_new_user_start_here(),
-        MagicalTuiAction::Help => run_tui_help(),
-        MagicalTuiAction::OpenTui => run_magical_tui(),
-        MagicalTuiAction::Doctor => run_doctor(),
-        MagicalTuiAction::DaemonStatus => run_daemon_command(DaemonCommand::Status),
-        MagicalTuiAction::RunHarness => run_guided_harness_session(),
-        MagicalTuiAction::PatchOpenClaw => {
-            run_patch_openclaw(vec![], None, None, None, false, false, true)
-        }
-        MagicalTuiAction::Sessions => run_session_browser(false),
-        MagicalTuiAction::AllSessions => run_session_browser(true),
-        MagicalTuiAction::AttachSession
-        | MagicalTuiAction::SummonSession
-        | MagicalTuiAction::ArchiveSession
-        | MagicalTuiAction::SacrificeSession => run_session_browser(true),
-        MagicalTuiAction::Quit => {
-            let primary = theme::fg(theme::PRIMARY);
-            let reset = theme::reset();
-            println!("{primary}The circle fades. Nothing changed.{reset}");
-            Ok(())
-        }
-    }
-}
-
-fn parse_magical_tui_input(input: &str) -> Result<MagicalTuiRequest> {
-    let input = input.trim();
-    if input.is_empty() {
-        return Ok(MagicalTuiRequest::Action(MagicalTuiAction::OpenTui));
-    }
-    if !input.starts_with('/') {
-        return Ok(MagicalTuiRequest::NaturalPrompt(input.to_string()));
-    }
-
-    let (command, rest) = split_command(input);
-    match command {
-        "/start" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::StartHere)),
-        "/help" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::Help)),
-        "/tui" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::OpenTui)),
-        "/doctor" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::Doctor)),
-        "/daemon" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::DaemonStatus)),
-        "/patch" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::PatchOpenClaw)),
-        "/sessions" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::Sessions)),
-        "/all" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::AllSessions)),
-        "/run" => parse_run_slash_command(rest),
-        "/codex" => parse_harness_slash_command("codex", rest),
-        "/claude" => parse_harness_slash_command("claude", rest),
-        "/attach" => parse_session_slash_command(rest, MagicalTuiRequest::AttachSession),
-        "/summon" => parse_session_slash_command(rest, MagicalTuiRequest::SummonSession),
-        "/archive" => parse_session_slash_command(rest, MagicalTuiRequest::ArchiveSession),
-        "/sacrifice" => parse_session_slash_command(rest, MagicalTuiRequest::SacrificeSession),
-        "/quit" | "/exit" => Ok(MagicalTuiRequest::Action(MagicalTuiAction::Quit)),
-        _ => anyhow::bail!(
-            "unknown Coven slash command `{command}`. Type `/help` to see available commands"
-        ),
-    }
-}
-
-fn split_command(input: &str) -> (&str, &str) {
-    if let Some(index) = input.find(char::is_whitespace) {
-        (&input[..index], input[index..].trim())
-    } else {
-        (input, "")
-    }
-}
-
-fn parse_run_slash_command(rest: &str) -> Result<MagicalTuiRequest> {
-    if rest.trim().is_empty() {
-        return Ok(MagicalTuiRequest::Action(MagicalTuiAction::RunHarness));
-    }
-    let (first, remaining) = split_command(rest);
-    if matches!(first, "codex" | "claude") {
-        if remaining.is_empty() {
-            anyhow::bail!("`/run {first}` needs a task, for example `/run {first} fix tests`");
-        }
-        return Ok(MagicalTuiRequest::HarnessPrompt {
-            harness: first.to_string(),
-            prompt: remaining.to_string(),
-        });
-    }
-    Ok(MagicalTuiRequest::NaturalPrompt(rest.trim().to_string()))
-}
-
-fn parse_harness_slash_command(harness: &str, rest: &str) -> Result<MagicalTuiRequest> {
-    let prompt = rest.trim();
-    if prompt.is_empty() {
-        anyhow::bail!("`/{harness}` needs a task, for example `/{harness} fix tests`");
-    }
-    Ok(MagicalTuiRequest::HarnessPrompt {
-        harness: harness.to_string(),
-        prompt: prompt.to_string(),
-    })
-}
-
-fn parse_session_slash_command(
-    rest: &str,
-    build: fn(String) -> MagicalTuiRequest,
-) -> Result<MagicalTuiRequest> {
-    let session_id = rest.trim();
-    if session_id.is_empty() {
-        anyhow::bail!("this slash command needs a session id");
-    }
-    Ok(build(session_id.to_string()))
-}
-
-fn run_default_prompt_session(prompt: &str) -> Result<()> {
-    let harness = default_harness_id()
-        .ok_or_else(|| anyhow!("no supported harness is available; run `coven doctor` first"))?;
-    run_session(harness, &[prompt.to_string()], None, None, false)
-}
-
-fn run_tui_help() -> Result<()> {
-    let primary_strong = theme::fg(theme::PRIMARY_STRONG);
-    let reset = theme::reset();
-    println!("{primary_strong}Coven TUI{reset}");
-    println!("Type a plain-language task and press Enter to launch your default harness.");
-    println!("Use slash commands when you want a specific route. Examples:");
-    println!("  fix the failing tests");
-    println!("  /run codex explain this repo");
-    println!("  /claude review the latest diff");
-    println!("  /sessions");
-    println!("  /attach <session-id>");
-    println!("  /doctor");
-    Ok(())
-}
-
-fn run_new_user_start_here() -> Result<()> {
-    let primary_strong = theme::fg(theme::PRIMARY_STRONG);
-    let reset = theme::reset();
-    println!("{primary_strong}Coven quick start{reset}");
-    println!("Coven is a safe room for coding agents. It keeps each run tied to this project,");
-    println!("records the session, and lets other tools list or attach to the work later.\n");
-    println!("Recommended first run:");
-    println!("  1. coven doctor");
-    println!("  2. coven run codex \"explain this repo in 5 bullets\"");
-    println!("  3. coven sessions");
-    println!("\nSetup check:\n");
-    run_doctor()
-}
-
-fn run_guided_harness_session() -> Result<()> {
-    let primary_strong = theme::fg(theme::PRIMARY_STRONG);
-    let reset = theme::reset();
-    println!("{primary_strong}Run an agent in this project{reset}");
-    println!("Coven will create a session record, validate the project root, then attach to the harness.\n");
-    let default_harness = default_harness_id().unwrap_or("codex");
-    let harness_prompt = format!("Harness [default: {default_harness}; options: codex, claude]: ");
-    let harness =
-        prompt_for_optional_line(&harness_prompt)?.unwrap_or_else(|| default_harness.to_string());
-    let prompt = prompt_for_required_line("Task for the agent: ")?;
-    let title = prompt_for_optional_line("Optional session title [enter to skip]: ")?;
-    run_session(&harness, &[prompt], None, title.as_deref(), false)
-}
-
-fn run_sessions_command(
-    include_archived: bool,
-    manage: bool,
-    plain: bool,
-    json: bool,
-) -> Result<()> {
-    match sessions_command_mode(
-        io::stdin().is_terminal(),
-        io::stdout().is_terminal(),
-        manage,
-        plain,
-        json,
-    ) {
-        SessionsCommandMode::Browser => run_session_browser(include_archived),
-        SessionsCommandMode::List => list_sessions_plain(include_archived),
-        SessionsCommandMode::Json => list_sessions_json(include_archived),
-    }
-}
-
-fn sessions_command_mode(
-    stdin_terminal: bool,
-    stdout_terminal: bool,
-    manage: bool,
-    plain: bool,
-    json: bool,
-) -> SessionsCommandMode {
-    if json {
-        SessionsCommandMode::Json
-    } else if plain {
-        SessionsCommandMode::List
-    } else if manage || (stdin_terminal && stdout_terminal) {
-        SessionsCommandMode::Browser
-    } else {
-        SessionsCommandMode::List
-    }
-}
-
-fn run_session_browser(include_archived: bool) -> Result<()> {
-    let primary = theme::fg(theme::PRIMARY);
-    let reset = theme::reset();
-    let store_path = coven_store_path()?;
-    let conn = store::open_store(&store_path)?;
-    let sessions = if include_archived {
-        store::list_sessions_including_archived(&conn)?
-    } else {
-        store::list_sessions(&conn)?
-    };
-
-    if sessions.is_empty() {
-        println!("No Coven sessions to manage yet.");
-        println!("Start one with `coven run codex \"explain this repo in 5 bullets\"`.");
-        return Ok(());
-    }
-
-    if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
-        println!("{}", render_session_browser_frame_plain(&sessions, 0, 0));
-        println!("\nTip: run this in a terminal to select a session and choose an action.");
-        return Ok(());
-    }
-
-    let mut selected_session = 0;
-    let mut selected_action = 0;
-    enable_raw_mode().context("failed to enter Coven session browser")?;
-    execute!(io::stdout(), EnableMouseCapture)
-        .context("failed to enable Coven session browser mouse support")?;
-    let selected = loop {
-        selected_action = selected_action.min(
-            session_browser_actions(&sessions[selected_session])
-                .len()
-                .saturating_sub(1),
-        );
-        execute!(io::stdout(), Clear(ClearType::All), MoveTo(0, 0))
-            .context("failed to redraw Coven session browser")?;
-        print!(
-            "{}",
-            render_session_browser_frame_for_raw_terminal(
-                &sessions,
-                selected_session,
-                selected_action
-            )
-        );
-        io::stdout()
-            .flush()
-            .context("failed to flush Coven session browser")?;
-
-        match event::read().context("failed to read session browser input")? {
-            Event::Key(key) if is_key_press(key.kind) => match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    selected_session = move_session_browser_selection(
-                        selected_session,
-                        sessions.len(),
-                        SessionBrowserMove::Up,
-                    );
-                    selected_action = 0;
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    selected_session = move_session_browser_selection(
-                        selected_session,
-                        sessions.len(),
-                        SessionBrowserMove::Down,
-                    );
-                    selected_action = 0;
-                }
-                KeyCode::Left | KeyCode::BackTab => {
-                    selected_action = move_session_browser_selection(
-                        selected_action,
-                        session_browser_actions(&sessions[selected_session]).len(),
-                        SessionBrowserMove::PreviousAction,
-                    );
-                }
-                KeyCode::Right | KeyCode::Tab => {
-                    selected_action = move_session_browser_selection(
-                        selected_action,
-                        session_browser_actions(&sessions[selected_session]).len(),
-                        SessionBrowserMove::NextAction,
-                    );
-                }
-                KeyCode::Enter => {
-                    let action =
-                        session_browser_actions(&sessions[selected_session])[selected_action];
-                    break Some((sessions[selected_session].clone(), action.kind));
-                }
-                KeyCode::Char(value) => {
-                    let actions = session_browser_actions(&sessions[selected_session]);
-                    if let Some(action) = actions.iter().find(|action| {
-                        action
-                            .key
-                            .chars()
-                            .eq(std::iter::once(value.to_ascii_lowercase()))
-                    }) {
-                        break Some((sessions[selected_session].clone(), action.kind));
-                    }
-                    if matches!(value, 'q' | 'Q') {
-                        break None;
-                    }
-                }
-                KeyCode::Esc => break None,
-                _ => {}
-            },
-            Event::Mouse(mouse) => {
-                if !matches!(mouse.kind, MouseEventKind::Down(_)) {
-                    continue;
-                }
-                let displayed_count = sessions.len().min(SESSION_BROWSER_MAX_VISIBLE_SESSIONS);
-                if let Some(index) = session_browser_session_row_to_index(
-                    mouse.row as usize,
-                    displayed_count,
-                    sessions.len(),
-                ) {
-                    selected_session = index;
-                    selected_action = 0;
-                    continue;
-                }
-
-                let has_more_sessions = sessions.len() > SESSION_BROWSER_MAX_VISIBLE_SESSIONS;
-                let action_count = session_browser_actions(&sessions[selected_session]).len();
-                if let Some(index) = session_browser_action_row_to_index(
-                    mouse.row as usize,
-                    displayed_count,
-                    has_more_sessions,
-                    action_count,
-                ) {
-                    selected_action = index;
-                    let action =
-                        session_browser_actions(&sessions[selected_session])[selected_action];
-                    break Some((sessions[selected_session].clone(), action.kind));
-                }
-            }
-            _ => {}
-        }
-    };
-    execute!(io::stdout(), DisableMouseCapture)
-        .context("failed to disable Coven session browser mouse support")?;
-    disable_raw_mode().context("failed to leave Coven session browser")?;
-    println!();
-
-    if let Some((session, action)) = selected {
-        run_session_browser_action(&session, action)
-    } else {
-        println!("{primary}Closed session browser. Nothing changed.{reset}");
-        Ok(())
-    }
-}
-
-fn run_session_browser_action(
-    session: &store::SessionRecord,
-    action: SessionBrowserActionKind,
-) -> Result<()> {
-    let primary = theme::fg(theme::PRIMARY);
-    let reset = theme::reset();
-    match action {
-        SessionBrowserActionKind::Attach => attach_session(&session.id),
-        SessionBrowserActionKind::Summon => summon_session_command(&session.id),
-        SessionBrowserActionKind::Archive => archive_session_command(&session.id),
-        SessionBrowserActionKind::Sacrifice => {
-            let confirmation = prompt_for_required_line(&format!(
-                "Type `sacrifice` to permanently delete `{}` and its events: ",
-                first_chars(&session.id, 12)
-            ))?;
-            if confirmation != "sacrifice" {
-                println!("{primary}Sacrifice cancelled. Nothing changed.{reset}");
-                return Ok(());
-            }
-            sacrifice_session_command(&session.id, true)
-        }
-        SessionBrowserActionKind::Back => {
-            println!("{primary}Closed session browser. Nothing changed.{reset}");
-            Ok(())
-        }
-    }
-}
-
-fn session_browser_actions(session: &store::SessionRecord) -> Vec<SessionBrowserAction> {
-    let attach_label = if session.status == RUNNING_SESSION_STATUS {
-        "Rejoin"
-    } else {
-        "View Log"
-    };
-    let attach_help = if session.status == RUNNING_SESSION_STATUS {
-        "Follow live output and send input"
-    } else {
-        "Replay captured output"
-    };
-    let mut actions = vec![SessionBrowserAction {
-        key: "a",
-        label: attach_label,
-        help: attach_help,
-        kind: SessionBrowserActionKind::Attach,
-    }];
-
-    if session.archived_at.is_some() {
-        actions.push(SessionBrowserAction {
-            key: "s",
-            label: "Summon",
-            help: "Restore this archived session",
-            kind: SessionBrowserActionKind::Summon,
-        });
-    } else if session.status != RUNNING_SESSION_STATUS {
-        actions.push(SessionBrowserAction {
-            key: "r",
-            label: "Archive",
-            help: "Hide from active list, keep events",
-            kind: SessionBrowserActionKind::Archive,
-        });
-    }
-
-    if session.status != RUNNING_SESSION_STATUS {
-        actions.push(SessionBrowserAction {
-            key: "x",
-            label: "Sacrifice",
-            help: "Permanent delete after typed confirm",
-            kind: SessionBrowserActionKind::Sacrifice,
-        });
-    }
-
-    actions.push(SessionBrowserAction {
-        key: "q",
-        label: "Back",
-        help: "Close without changing anything",
-        kind: SessionBrowserActionKind::Back,
-    });
-    actions
-}
-
-fn render_session_browser_frame_plain(
-    sessions: &[store::SessionRecord],
-    selected_session: usize,
-    selected_action: usize,
-) -> String {
-    render_session_browser_frame_with_mode(
-        sessions,
-        selected_session,
-        selected_action,
-        theme::TerminalMode::NoColor,
-    )
-}
-
-fn render_session_browser_frame_for_raw_terminal(
-    sessions: &[store::SessionRecord],
-    selected_session: usize,
-    selected_action: usize,
-) -> String {
-    render_session_browser_frame_with_mode(
-        sessions,
-        selected_session,
-        selected_action,
-        theme::mode(),
-    )
-    .replace('\n', "\r\n")
-}
-
-fn render_session_browser_frame_with_mode(
-    sessions: &[store::SessionRecord],
-    selected_session: usize,
-    selected_action: usize,
-    mode: theme::TerminalMode,
-) -> String {
-    let primary = theme::Fg::with_mode(theme::PRIMARY, mode);
-    let primary_strong = theme::Fg::with_mode(theme::PRIMARY_STRONG, mode);
-    let field_label = theme::Fg::with_mode(theme::FIELD_LABEL, mode);
-    let user_label = theme::Fg::with_mode(theme::USER_LABEL, mode);
-    let dim = theme::Fg::with_mode(theme::DIM, mode);
-    let reset = theme::Reset::with_mode(mode);
-    let selected_session = selected_session.min(sessions.len().saturating_sub(1));
-    let selected = &sessions[selected_session];
-    let actions = session_browser_actions(selected);
-    let selected_action = selected_action.min(actions.len().saturating_sub(1));
-    let mut frame = String::new();
-
-    frame.push_str(&format!("{primary_strong}Session browser{reset}\n"));
-    frame.push_str(&format!(
-        "{user_label}Select work, then choose an action. No IDs to copy.{reset}\n\n"
-    ));
-    frame.push_str(&format!(
-        "{primary_strong}Sessions{reset} {dim}(title | state | harness){reset}\n"
-    ));
-    frame.push_str(&format!(
-        "{dim}Up/Down or click session · Tab/click action · Enter runs{reset}\n"
-    ));
-
-    for (index, session) in sessions
-        .iter()
-        .take(SESSION_BROWSER_MAX_VISIBLE_SESSIONS)
-        .enumerate()
-    {
-        let pointer = if index == selected_session { ">" } else { " " };
-        let color = if index == selected_session {
-            primary_strong
-        } else {
-            primary
-        };
-        frame.push_str(&format!(
-            "{color}{} {title:<30} {status:<9} {harness}{reset}\n",
-            pointer,
-            title = fit_chars(&session.title, 30),
-            status = session_browser_status(session),
-            harness = fit_chars(&session.harness, 8)
-        ));
-    }
-    if sessions.len() > SESSION_BROWSER_MAX_VISIBLE_SESSIONS {
-        frame.push_str(&format!(
-            "{dim}... {} more session(s). Use `coven sessions --all` for text list.{reset}\n",
-            sessions.len() - SESSION_BROWSER_MAX_VISIBLE_SESSIONS
-        ));
-    }
-
-    frame.push_str(&format!("\n{primary_strong}Selected{reset}\n"));
-    frame.push_str(&format!(
-        "{field_label}Title:{reset} {}\n",
-        fit_chars(&selected.title, 50)
-    ));
-    frame.push_str(&format!(
-        "{field_label}Internal ID:{reset} {}  {field_label}Runtime:{reset} {}  {field_label}Harness:{reset} {}\n",
-        first_chars(&selected.id, 18),
-        selected.status,
-        selected.harness
-    ));
-    frame.push_str(&format!(
-        "{field_label}Project:{reset} {}\n",
-        fit_chars(&selected.project_root, 58)
-    ));
-    frame.push_str(&format!(
-        "{field_label}Updated:{reset} {}  {field_label}State:{reset} {}\n",
-        selected.updated_at,
-        session_browser_status(selected)
-    ));
-
-    frame.push_str(&format!("\n{primary_strong}Actions{reset}\n"));
-    for (index, action) in actions.iter().enumerate() {
-        let pointer = if index == selected_action { ">" } else { " " };
-        let color = if index == selected_action {
-            primary_strong
-        } else {
-            primary
-        };
-        frame.push_str(&format!(
-            "{color}{} [{}] {:<10} {}{reset}\n",
-            pointer, action.key, action.label, action.help
-        ));
-    }
-    frame
-}
-
-fn session_browser_status(session: &store::SessionRecord) -> &'static str {
-    if session.archived_at.is_some() {
-        "archived"
-    } else if session.status == RUNNING_SESSION_STATUS {
-        "running"
-    } else {
-        "active"
-    }
-}
-
-fn move_session_browser_selection(
-    current: usize,
-    item_count: usize,
-    direction: SessionBrowserMove,
-) -> usize {
-    if item_count == 0 {
-        return 0;
-    }
-    match direction {
-        SessionBrowserMove::Up | SessionBrowserMove::PreviousAction => {
-            current.checked_sub(1).unwrap_or(item_count - 1)
-        }
-        SessionBrowserMove::Down | SessionBrowserMove::NextAction => (current + 1) % item_count,
-    }
-}
-
-fn is_key_press(kind: KeyEventKind) -> bool {
-    kind == KeyEventKind::Press
-}
-
-fn session_browser_session_row_to_index(
-    row: usize,
-    displayed_count: usize,
-    total_count: usize,
-) -> Option<usize> {
-    let index = row.checked_sub(SESSION_BROWSER_FIRST_SESSION_ROW)?;
-    (index < displayed_count && index < total_count).then_some(index)
-}
-
-fn session_browser_action_row_to_index(
-    row: usize,
-    displayed_count: usize,
-    has_more_sessions: bool,
-    action_count: usize,
-) -> Option<usize> {
-    let extra_rows = usize::from(has_more_sessions);
-    let first_action_row = SESSION_BROWSER_FIRST_SESSION_ROW + displayed_count + extra_rows + 8;
-    let index = row.checked_sub(first_action_row)?;
-    (index < action_count).then_some(index)
-}
-
-fn render_magical_tui_frame(selection: usize, input: &str) -> String {
-    render_magical_tui_frame_with_mode_and_width(
-        selection,
-        input,
-        theme::mode(),
-        magical_tui_inner_width(),
-    )
-}
-
-fn render_magical_tui_frame_for_raw_terminal(selection: usize, input: &str) -> String {
-    render_magical_tui_frame(selection, input).replace('\n', "\r\n")
-}
-
-fn render_magical_tui_frame_plain(selection: usize) -> String {
-    render_magical_tui_frame_with_mode_and_width(
-        selection,
-        "",
-        theme::TerminalMode::NoColor,
-        MAGICAL_TUI_DEFAULT_INNER_WIDTH,
-    )
-}
-
-#[cfg(test)]
-fn render_magical_tui_frame_plain_with_width(selection: usize, inner_width: usize) -> String {
-    render_magical_tui_frame_with_mode_and_width(
-        selection,
-        "",
-        theme::TerminalMode::NoColor,
-        inner_width,
-    )
-}
-
-#[cfg(test)]
-fn render_magical_tui_frame_plain_with_input(
-    selection: usize,
-    input: &str,
-    inner_width: usize,
-) -> String {
-    render_magical_tui_frame_with_mode_and_width(
-        selection,
-        input,
-        theme::TerminalMode::NoColor,
-        inner_width,
-    )
-}
-
-fn render_magical_tui_frame_with_mode_and_width(
-    selection: usize,
-    input: &str,
-    mode: theme::TerminalMode,
-    inner_width: usize,
-) -> String {
-    let inner_width = normalized_magical_tui_inner_width(inner_width);
-    let primary = theme::Fg::with_mode(theme::PRIMARY, mode);
-    let primary_strong = theme::Fg::with_mode(theme::PRIMARY_STRONG, mode);
-    let field_label = theme::Fg::with_mode(theme::FIELD_LABEL, mode);
-    let user_label = theme::Fg::with_mode(theme::USER_LABEL, mode);
-    let dim = theme::Fg::with_mode(theme::DIM, mode);
-    let reset = theme::Reset::with_mode(mode);
-    let mut frame = String::new();
-    frame.push_str(&magical_tui_line(
-        "COVEN",
-        primary_strong,
-        reset,
-        inner_width,
-    ));
-    frame.push_str(&magical_tui_line(
-        "Prompt-first agent console",
-        field_label,
-        reset,
-        inner_width,
-    ));
-    frame.push_str(&magical_tui_line(
-        "Type natural language, or use slash commands.",
-        user_label,
-        reset,
-        inner_width,
-    ));
-    frame.push('\n');
-    for line in magical_tui_graph_lines() {
-        frame.push_str(&magical_tui_line(line, primary, reset, inner_width));
-    }
-    frame.push('\n');
-    frame.push_str(&magical_tui_line(
-        "Input",
-        primary_strong,
-        reset,
-        inner_width,
-    ));
-    frame.push_str(&magical_tui_line(
-        &magical_tui_prompt_row(input, inner_width),
-        user_label,
-        reset,
-        inner_width,
-    ));
-    frame.push_str(&magical_tui_line(
-        "Enter runs input. Empty Enter runs selected slash. Esc quits.",
-        dim,
-        reset,
-        inner_width,
-    ));
-    frame.push('\n');
-
-    frame.push_str(&magical_tui_line(
-        "Slash commands",
-        primary_strong,
-        reset,
-        inner_width,
-    ));
-    for (index, item) in magical_tui_items().iter().enumerate() {
-        let pointer = if index == selection { ">" } else { " " };
-        let content = magical_tui_command_row(pointer, item, inner_width);
-        let color = if index == selection {
-            primary_strong
-        } else {
-            primary
-        };
-        frame.push_str(&magical_tui_line(&content, color, reset, inner_width));
-    }
-
-    let selected = magical_tui_items()[selection.min(magical_tui_items().len() - 1)];
-    frame.push('\n');
-    frame.push_str(&magical_tui_line(
-        "Selected slash",
-        primary_strong,
-        reset,
-        inner_width,
-    ));
-    frame.push_str(&magical_tui_line(
-        selected.description,
-        user_label,
-        reset,
-        inner_width,
-    ));
-    frame.push_str(&magical_tui_line(
-        &format!("{} → {}", selected.slash, selected.command),
-        primary_strong,
-        reset,
-        inner_width,
-    ));
-    frame.push_str(&magical_tui_line(
-        "Store: ~/.coven",
-        dim,
-        reset,
-        inner_width,
-    ));
-    frame
-}
-
-fn magical_tui_graph_lines() -> &'static [&'static str] {
-    &[
-        "        [nova]          [cody]",
-        "          |              |",
-        "          |              |",
-        " [memory] -- [coven] -- [sessions]",
-        "          |              |",
-        "          |              |",
-        "     [gateway]      [claude]",
-    ]
-}
-
-fn magical_tui_prompt_row(input: &str, inner_width: usize) -> String {
-    let value = if input.is_empty() {
-        "fix the failing tests  |  /run codex plan the refactor"
-    } else {
-        input
-    };
-    fit_chars(&format!("> {value}"), inner_width)
-}
-
-fn magical_tui_line(
-    content: &str,
-    text_color: impl std::fmt::Display,
-    reset: impl std::fmt::Display,
-    inner_width: usize,
-) -> String {
-    format!("{text_color}{}{reset}\n", fit_chars(content, inner_width))
-}
-
-fn magical_tui_command_row(pointer: &str, item: &MagicalTuiItem, inner_width: usize) -> String {
-    let row = format!("{pointer} {:<10} {}", item.slash, item.label);
-    fit_chars(&row, inner_width)
-}
-
-fn magical_tui_inner_width() -> usize {
-    crossterm::terminal::size()
-        .map(|(columns, _)| magical_tui_inner_width_for_columns(columns as usize))
-        .unwrap_or(MAGICAL_TUI_DEFAULT_INNER_WIDTH)
-}
-
-fn magical_tui_inner_width_for_columns(columns: usize) -> usize {
-    let available = columns.saturating_sub(2);
-    if available < MAGICAL_TUI_MIN_INNER_WIDTH {
-        available.max(18)
-    } else {
-        available.min(MAGICAL_TUI_MAX_INNER_WIDTH)
-    }
-}
-
-fn normalized_magical_tui_inner_width(inner_width: usize) -> usize {
-    inner_width.clamp(18, MAGICAL_TUI_MAX_INNER_WIDTH)
-}
-
-fn fit_chars(value: &str, limit: usize) -> String {
-    let count = value.chars().count();
-    if count <= limit {
-        return value.to_string();
-    }
-    if limit == 0 {
-        return String::new();
-    }
-    if limit == 1 {
-        return "…".to_string();
-    }
-
-    let mut fitted = value.chars().take(limit - 1).collect::<String>();
-    fitted.push('…');
-    fitted
-}
-
-fn move_magical_tui_selection(current: usize, direction: MagicalTuiMove) -> usize {
-    let item_count = magical_tui_items().len();
-    match direction {
-        MagicalTuiMove::Up => current.checked_sub(1).unwrap_or(item_count - 1),
-        MagicalTuiMove::Down => (current + 1) % item_count,
     }
 }
 
@@ -1695,69 +594,6 @@ fn run_session(
     }
 }
 
-fn list_sessions_plain(include_archived: bool) -> Result<()> {
-    let store_path = coven_store_path()?;
-    let conn = store::open_store(&store_path)?;
-    let sessions = if include_archived {
-        store::list_sessions_including_archived(&conn)?
-    } else {
-        store::list_sessions(&conn)?
-    };
-
-    if sessions.is_empty() {
-        if include_archived {
-            println!("No Coven sessions yet — active or archived.");
-        } else {
-            println!("No active Coven sessions yet.");
-        }
-        println!("Start or inspect with:");
-        println!("  coven doctor");
-        println!("  coven run codex \"explain this repo in 5 bullets\"");
-        println!("  coven sessions --all");
-    } else {
-        println!(
-            "{:<id_width$} {:<10} {:<8} {:<8} TITLE",
-            "SESSION",
-            "STATUS",
-            "HARNESS",
-            "RITUAL",
-            id_width = PLAIN_SESSION_ID_COLUMN_WIDTH
-        );
-        println!(
-            "{:<id_width$} {:<10} {:<8} {:<8} -----",
-            "-------",
-            "------",
-            "-------",
-            "------",
-            id_width = PLAIN_SESSION_ID_COLUMN_WIDTH
-        );
-        for session in sessions {
-            println!("{}", format_session_line(&session));
-        }
-        println!("\nRituals:");
-        println!(
-            "  coven summon <session-id>       # restore archived session, then replay/follow"
-        );
-        println!("  coven archive <session-id>      # hide from active list, keep events");
-        println!("  coven sacrifice <session-id> --yes  # permanently delete non-running session");
-    }
-
-    Ok(())
-}
-
-fn list_sessions_json(include_archived: bool) -> Result<()> {
-    let store_path = coven_store_path()?;
-    let conn = store::open_store(&store_path)?;
-    let sessions = if include_archived {
-        store::list_sessions_including_archived(&conn)?
-    } else {
-        store::list_sessions(&conn)?
-    };
-
-    println!("{}", render_sessions_json(&sessions)?);
-    Ok(())
-}
-
 fn archive_session_command(session_id: &str) -> Result<()> {
     let store_path = coven_store_path()?;
     let conn = store::open_store(&store_path)?;
@@ -2019,31 +855,40 @@ fn coven_home_from_env(coven_home: Option<OsString>, home: Option<OsString>) -> 
     Ok(PathBuf::from(home).join(DEFAULT_COVEN_HOME_DIR))
 }
 
-fn format_session_line(session: &store::SessionRecord) -> String {
-    let ritual = if session.archived_at.is_some() {
-        "archived"
-    } else {
-        "active"
-    };
-    format!(
-        "{:<id_width$} {:<10} {:<8} {:<8} {}",
-        session.id,
-        session.status,
-        session.harness,
-        ritual,
-        session.title,
-        id_width = PLAIN_SESSION_ID_COLUMN_WIDTH
-    )
-}
-
-fn render_sessions_json(sessions: &[store::SessionRecord]) -> Result<String> {
-    serde_json::to_string_pretty(&serde_json::json!({ "sessions": sessions }))
-        .context("failed to serialize sessions as JSON")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::is_key_press;
+    use crate::tui::sessions::{
+        format_session_line, render_session_browser_frame_plain, render_sessions_json,
+        session_browser_action_row_to_index, session_browser_actions,
+        session_browser_session_row_to_index, sessions_command_mode, SessionsCommandMode,
+        SESSION_BROWSER_FIRST_SESSION_ROW,
+    };
+    use crate::tui::shell::{
+        magical_tui_inner_width_for_columns, magical_tui_items, move_magical_tui_selection,
+        parse_magical_tui_input, render_magical_tui_frame_for_raw_terminal,
+        render_magical_tui_frame_plain, render_magical_tui_frame_plain_with_input,
+        render_magical_tui_frame_plain_with_width, MagicalTuiMove, MagicalTuiRequest,
+        MAGICAL_TUI_MAX_INNER_WIDTH,
+    };
+    use crossterm::event::KeyEventKind;
+
+    #[test]
+    fn tui_launcher_and_session_browser_are_owned_by_tui_modules() {
+        let shell_frame = tui::shell::render_frame_plain_for_test(0);
+        assert!(shell_frame.contains("CovenCLI"));
+
+        let sessions = [test_session_record(
+            "session-alpha-1234567890",
+            "completed",
+            "codex",
+            "Fix the failing tests before demo",
+            None,
+        )];
+        let browser_frame = tui::sessions::render_browser_frame_plain_for_test(&sessions, 0, 0);
+        assert!(browser_frame.contains("Session browser"));
+    }
 
     #[test]
     fn joined_prompt_rejects_empty_prompt() {
@@ -2132,8 +977,9 @@ mod tests {
     fn magical_tui_frame_uses_purple_gold_branding_and_lists_core_actions() {
         let frame = render_magical_tui_frame_plain(1);
 
-        assert!(frame.contains("COVEN"));
-        assert!(frame.contains("Prompt-first agent console"));
+        assert!(frame.contains("CovenCLI"));
+        assert!(frame.contains("Welcome back to the Coven."));
+        assert!(frame.contains("OpenCoven terminal home"));
         assert!(frame.contains("[coven]"));
         assert!(frame.contains("/start"));
         assert!(frame.contains("/help"));
@@ -2187,7 +1033,7 @@ mod tests {
     fn magical_tui_frame_previews_selected_spell_command() {
         let frame = render_magical_tui_frame_plain(0);
 
-        assert!(frame.contains("Selected slash"));
+        assert!(frame.contains("Selected command"));
         assert!(frame.contains("/start"));
         assert!(frame.contains("coven doctor"));
         assert!(frame.contains("~/.coven"));
@@ -2197,7 +1043,7 @@ mod tests {
     fn magical_tui_frame_is_newcomer_friendly() {
         let frame = render_magical_tui_frame_plain(5);
 
-        assert!(frame.contains("Type natural language"));
+        assert!(frame.contains("Ask anything"));
         assert!(frame.contains("Empty Enter runs selected slash"));
         assert!(frame.contains("Slash commands"));
         assert!(frame.contains("Launch Codex"));
@@ -2212,11 +1058,64 @@ mod tests {
     }
 
     #[test]
+    fn magical_tui_frame_renders_prompt_as_a_bordered_input_box() {
+        let frame = render_magical_tui_frame_plain_with_input(0, "summarize the repo", 76);
+
+        assert!(frame.contains("+-- Ask anything "));
+        assert!(frame.contains("| > summarize the repo"));
+        assert!(frame.contains("Ctrl+U clears"));
+    }
+
+    #[test]
     fn magical_tui_frame_includes_obsidian_style_graph() {
         let frame = render_magical_tui_frame_plain(0);
 
         assert!(frame.contains("[memory] -- [coven] -- [sessions]"));
         assert!(frame.contains("[gateway]"));
+    }
+
+    #[test]
+    fn magical_tui_frame_emulates_intricate_claude_code_home_without_emoji() {
+        let frame = render_magical_tui_frame_plain(0);
+
+        assert!(frame.contains("workspace"));
+        assert!(frame.contains("harness shelf"));
+        assert!(frame.contains("Codex ready"));
+        assert!(frame.contains("Claude Code ready"));
+        assert!(frame.contains("Release notes"));
+        assert!(frame.contains("Tips"));
+        assert!(
+            frame
+                .chars()
+                .all(|ch| ch == '\n' || ch == '\r' || ch.is_ascii()),
+            "TUI should stay icon/ASCII-only"
+        );
+    }
+
+    #[test]
+    fn magical_tui_frame_reads_like_a_claude_code_style_terminal_home() {
+        let frame = render_magical_tui_frame_plain(0);
+
+        assert!(frame.contains("System snapshot"));
+        assert!(frame.contains("Model lane"));
+        assert!(frame.contains("Workspace map"));
+        assert!(frame.contains("Task inbox"));
+        assert!(frame.contains("Context"));
+        assert!(frame.contains("Approvals"));
+    }
+
+    #[test]
+    fn magical_tui_frame_stays_within_supported_screen_widths() {
+        for inner_width in [18, 24, 34, 76, 96] {
+            let frame = render_magical_tui_frame_plain_with_width(3, inner_width);
+
+            for line in frame.lines() {
+                assert!(
+                    line.chars().count() <= inner_width,
+                    "line exceeded width {inner_width}: {line}"
+                );
+            }
+        }
     }
 
     #[test]

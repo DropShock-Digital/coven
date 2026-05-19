@@ -12,6 +12,7 @@ use ratatui::{
     },
     Frame,
 };
+use unicode_width::UnicodeWidthStr;
 
 use crate::theme::{
     self, AGENT_LABEL, DIM, HINT_KEY, HINT_LABEL, PRIMARY, PRIMARY_STRONG, SURFACE, SURFACE_STRONG,
@@ -36,11 +37,11 @@ pub(super) fn render_ui(f: &mut Frame, app: &mut App) {
         area,
     );
 
-    // Main layout: status bar (1) + chat area + input area (3)
+    let input_height = input_height(app);
     let chunks = Layout::vertical([
         Constraint::Length(1), // top status bar
         Constraint::Min(6),    // chat messages
-        Constraint::Length(3), // input
+        Constraint::Length(input_height),
         Constraint::Length(1), // bottom hint bar
     ])
     .split(area);
@@ -57,11 +58,16 @@ pub(super) fn render_ui(f: &mut Frame, app: &mut App) {
     if app.input_mode == InputMode::AgentSelect {
         render_agent_select(f, app, area);
     }
+
+    if app.show_session_overlay {
+        render_session_overlay(f, app, area);
+    }
 }
 
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let agent_name = app.active_agent_label();
     let harness = app.active_agent_harness();
+    let session = app.active_session_id().unwrap_or("no-session");
 
     let status_spans = vec![
         Span::styled(
@@ -74,6 +80,8 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
             theme::ratatui_style(AGENT_LABEL).bold(),
         ),
         Span::styled(format!(" ({harness})"), theme::ratatui_style(DIM)),
+        Span::styled(" \u{2502} ", theme::ratatui_style(DIM)),
+        Span::styled(session.to_string(), theme::ratatui_style(DIM)),
         Span::styled(" \u{2502} ", theme::ratatui_style(DIM)),
         if app.is_responding {
             Span::styled(
@@ -211,15 +219,19 @@ fn render_input(f: &mut Frame, app: &App, area: Rect) {
 
     let input_widget = Paragraph::new(app.input.as_str())
         .block(input_block)
-        .style(Style::default().fg(Color::White));
+        .style(Style::default().fg(Color::White))
+        .wrap(Wrap { trim: false });
 
     f.render_widget(input_widget, area);
 
     // Position cursor
     if area.width > 2 && area.height > 1 {
-        let cursor_x = area.x + 1 + app.cursor_pos as u16;
-        let cursor_y = area.y + 1;
-        if cursor_x < area.x + area.width.saturating_sub(1) {
+        let (cursor_line, cursor_col) = cursor_line_col(&app.input, app.cursor_pos);
+        let cursor_x = area.x + 1 + cursor_col.min(area.width.saturating_sub(2) as usize) as u16;
+        let cursor_y = area.y + 1 + cursor_line.min(area.height.saturating_sub(2) as usize) as u16;
+        if cursor_x < area.x + area.width.saturating_sub(1)
+            && cursor_y < area.y + area.height.saturating_sub(1)
+        {
             f.set_cursor_position((cursor_x, cursor_y));
         }
     }
@@ -241,10 +253,14 @@ fn render_hint_bar(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(" commands  ", theme::ratatui_style(HINT_LABEL)),
             Span::styled("/agent", theme::ratatui_style(HINT_KEY).bold()),
             Span::styled(" switch  ", theme::ratatui_style(HINT_LABEL)),
+            Span::styled("PgUp/PgDn", theme::ratatui_style(HINT_KEY).bold()),
+            Span::styled(" scroll  ", theme::ratatui_style(HINT_LABEL)),
+            Span::styled("Shift+Enter", theme::ratatui_style(HINT_KEY).bold()),
+            Span::styled(" newline  ", theme::ratatui_style(HINT_LABEL)),
+            Span::styled("Ctrl+K", theme::ratatui_style(HINT_KEY).bold()),
+            Span::styled(" palette  ", theme::ratatui_style(HINT_LABEL)),
             Span::styled("Ctrl+C", theme::ratatui_style(HINT_KEY).bold()),
             Span::styled(" quit  ", theme::ratatui_style(HINT_LABEL)),
-            Span::styled("PgUp/PgDn", theme::ratatui_style(HINT_KEY).bold()),
-            Span::styled(" scroll", theme::ratatui_style(HINT_LABEL)),
         ]
     };
 
@@ -273,6 +289,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 ("/clear, /cls", "Clear chat history"),
                 ("/exit, /quit, /q", "Exit Coven chat"),
                 ("/export", "Save conversation to ~/.coven/exports/"),
+                ("/palette", "Toggle this command palette"),
             ],
         ),
         (
@@ -285,14 +302,15 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         (
             "Sessions",
             vec![
-                ("/session <id>", "Attach to session (coming soon)"),
-                ("/attach <id>", "Attach to agent task (coming soon)"),
+                ("/sessions", "Open daemon session overlay"),
+                ("/attach <id>", "Attach to daemon session"),
+                ("/run <harness> <prompt>", "Launch via daemon"),
+                ("/kill [id]", "Ask daemon to kill a live session"),
             ],
         ),
         (
             "Advanced",
             vec![
-                ("/run <cmd>", "Execute command (coming soon)"),
                 ("/delegate <a> <t>", "Queue task for agent (coming soon)"),
                 ("/trace", "Show execution trace (coming soon)"),
                 ("/mem <query>", "Search agent memory (coming soon)"),
@@ -392,4 +410,132 @@ fn render_agent_select(f: &mut Frame, app: &App, area: Rect) {
 
     let list = List::new(items).block(agent_block);
     f.render_widget(list, popup_area);
+}
+
+fn render_session_overlay(f: &mut Frame, app: &App, area: Rect) {
+    let overlay_width = 80u16.min(area.width.saturating_sub(4));
+    let overlay_height = 18u16.min(area.height.saturating_sub(4));
+    let x = (area.width.saturating_sub(overlay_width)) / 2;
+    let y = (area.height.saturating_sub(overlay_height)) / 2;
+    let popup_area = Rect::new(x, y, overlay_width, overlay_height);
+
+    f.render_widget(Clear, popup_area);
+
+    let mut lines: Vec<Line<'_>> = vec![
+        Line::from(Span::styled(
+            "  Sessions",
+            theme::ratatui_style(PRIMARY_STRONG).bold(),
+        )),
+        Line::from(Span::styled(
+            "  /attach <id> to follow, /kill <id> to stop, r refresh, Esc close",
+            theme::ratatui_style(DIM),
+        )),
+        Line::from(""),
+    ];
+
+    if app.sessions.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  No active sessions returned by the daemon.",
+            theme::ratatui_style(DIM),
+        )));
+    } else {
+        for session in app.sessions.iter().take(10) {
+            let marker = if app.active_session_id() == Some(session.id.as_str()) {
+                ">"
+            } else {
+                " "
+            };
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {marker} "), theme::ratatui_style(PRIMARY)),
+                Span::styled(
+                    format!("{:<8}", session.status),
+                    Style::default().fg(Color::Green),
+                ),
+                Span::styled(
+                    format!(" {:<7} ", session.harness),
+                    theme::ratatui_style(DIM),
+                ),
+                Span::styled(
+                    truncate_for_width(&session.id, 12),
+                    theme::ratatui_style(PRIMARY),
+                ),
+                Span::styled("  ", theme::ratatui_style(DIM)),
+                Span::styled(
+                    truncate_for_width(
+                        &session.title,
+                        popup_area.width.saturating_sub(36) as usize,
+                    ),
+                    Style::default().fg(Color::White),
+                ),
+            ]));
+        }
+    }
+
+    let block = Block::default()
+        .title(Span::styled(
+            " daemon session overlay ",
+            theme::ratatui_style(PRIMARY).bold(),
+        ))
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(theme::ratatui_style(PRIMARY))
+        .style(Style::default().bg(theme::ratatui_color(SURFACE_STRONG)));
+
+    let overlay = Paragraph::new(Text::from(lines))
+        .block(block)
+        .wrap(Wrap { trim: false });
+    f.render_widget(overlay, popup_area);
+}
+
+fn input_height(app: &App) -> u16 {
+    let line_count = input_line_count(&app.input) as u16;
+    (line_count + 2).clamp(3, 8)
+}
+
+fn cursor_line_col(input: &str, cursor_pos: usize) -> (usize, usize) {
+    let cursor_pos = cursor_pos.min(input.len());
+    let before = &input[..cursor_pos];
+    let line = before.bytes().filter(|byte| *byte == b'\n').count();
+    let col = before
+        .rsplit_once('\n')
+        .map(|(_, tail)| UnicodeWidthStr::width(tail))
+        .unwrap_or_else(|| UnicodeWidthStr::width(before));
+    (line, col)
+}
+
+fn input_line_count(input: &str) -> usize {
+    input.bytes().filter(|byte| *byte == b'\n').count() + 1
+}
+
+fn truncate_for_width(value: &str, max_width: usize) -> String {
+    if UnicodeWidthStr::width(value) <= max_width {
+        return value.to_string();
+    }
+    let mut output = String::new();
+    for ch in value.chars() {
+        let next_width = UnicodeWidthStr::width(output.as_str())
+            + UnicodeWidthStr::width(ch.to_string().as_str());
+        if next_width >= max_width.saturating_sub(1) {
+            break;
+        }
+        output.push(ch);
+    }
+    output.push('…');
+    output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_position_counts_trailing_newline_as_next_line() {
+        assert_eq!(cursor_line_col("first\n", "first\n".len()), (1, 0));
+    }
+
+    #[test]
+    fn input_line_count_includes_trailing_empty_line() {
+        assert_eq!(input_line_count("first\nsecond\n"), 3);
+        assert_eq!(input_line_count(""), 1);
+    }
 }

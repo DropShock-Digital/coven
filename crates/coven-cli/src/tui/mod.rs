@@ -1,4 +1,11 @@
-//! TUI surfaces for the coven CLI. Currently hosts the chat module; Phases 3–4
-//! will land the launcher and session-browser carve-outs from main.rs here.
+//! TUI surfaces for the coven CLI.
+
+use crossterm::event::KeyEventKind;
 
 pub mod chat;
+pub(crate) mod sessions;
+pub(crate) mod shell;
+
+pub(crate) fn is_key_press(kind: KeyEventKind) -> bool {
+    kind == KeyEventKind::Press
+}

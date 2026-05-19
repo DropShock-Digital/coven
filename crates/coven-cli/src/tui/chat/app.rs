@@ -3,7 +3,9 @@
 
 use std::time::{Duration, Instant};
 
-use crate::harness;
+use crate::{harness, store};
+
+use super::client::{ChatClient, ChatEventQuery, DaemonChatClient, LaunchRequest};
 
 // ── Data types ─────────────────────────────────────────────────────────────
 
@@ -59,6 +61,16 @@ pub(super) struct App {
     pub(super) spinner_frame: usize,
     pub(super) is_responding: bool,
     pub(super) last_tick: Instant,
+    pub(super) active_session_id: Option<String>,
+    pub(super) last_event_seq: Option<i64>,
+    event_poll_backoff_until: Option<Instant>,
+    event_poll_failure_streak: u32,
+    last_event_poll_error: Option<String>,
+    pub(super) sessions: Vec<store::SessionRecord>,
+    pub(super) show_session_overlay: bool,
+    pub(super) input_history: Vec<String>,
+    pub(super) history_index: Option<usize>,
+    client: Box<dyn ChatClient>,
 }
 
 pub(super) const SPINNER_FRAMES: &[&str] = &["", "", "", "", "", "", "", ""];
@@ -67,7 +79,14 @@ impl App {
     pub(super) fn new() -> Self {
         let agents = discover_agents();
         let active_agent = agents.iter().position(|a| a.available);
+        Self::new_with_state(agents, active_agent, Box::<DaemonChatClient>::default())
+    }
 
+    fn new_with_state(
+        agents: Vec<AgentInfo>,
+        active_agent: Option<usize>,
+        client: Box<dyn ChatClient>,
+    ) -> Self {
         let mut app = App {
             messages: Vec::new(),
             input: String::new(),
@@ -81,6 +100,16 @@ impl App {
             spinner_frame: 0,
             is_responding: false,
             last_tick: Instant::now(),
+            active_session_id: None,
+            last_event_seq: None,
+            event_poll_backoff_until: None,
+            event_poll_failure_streak: 0,
+            last_event_poll_error: None,
+            sessions: Vec::new(),
+            show_session_overlay: false,
+            input_history: Vec::new(),
+            history_index: None,
+            client,
         };
 
         app.push_system_message(
@@ -98,6 +127,13 @@ impl App {
         }
 
         app
+    }
+
+    #[cfg(test)]
+    pub(super) fn new_with_client(client: Box<dyn ChatClient>) -> Self {
+        let agents = discover_agents();
+        let active_agent = agents.iter().position(|a| a.available);
+        Self::new_with_state(agents, active_agent, client)
     }
 
     pub(super) fn push_system_message(&mut self, content: &str) {
@@ -141,6 +177,10 @@ impl App {
             .unwrap_or("—")
     }
 
+    pub(super) fn active_session_id(&self) -> Option<&str> {
+        self.active_session_id.as_deref()
+    }
+
     pub(super) fn handle_input(&mut self) -> Option<SlashCommandResult> {
         let raw = self.input.trim().to_string();
         self.input.clear();
@@ -154,9 +194,13 @@ impl App {
             return Some(self.handle_slash_command(&raw));
         }
 
-        // Regular chat message
+        self.record_history(&raw);
         self.push_user_message(&raw);
-        self.simulate_agent_response(&raw);
+        if let Some(session_id) = self.active_session_id.clone() {
+            self.forward_input_to_session(&session_id, &raw);
+        } else {
+            self.launch_chat_session(&raw);
+        }
         self.scroll_to_bottom();
         Some(SlashCommandResult::Handled)
     }
@@ -188,18 +232,15 @@ impl App {
             }
             "/exit" | "/quit" | "/q" => SlashCommandResult::Quit,
             "/session" | "/sessions" => {
-                self.push_system_message(
-                    "Session management coming soon. Use `coven sessions` in another terminal.",
-                );
+                self.refresh_sessions();
+                self.show_session_overlay = !self.show_session_overlay;
                 SlashCommandResult::Handled
             }
             "/attach" => {
                 if arg.is_empty() {
                     self.push_system_message("Usage: /attach <session-id>");
                 } else {
-                    self.push_system_message(&format!(
-                        "Attaching to session {arg}... (coming soon)"
-                    ));
+                    self.attach_session(arg);
                 }
                 SlashCommandResult::Handled
             }
@@ -208,11 +249,29 @@ impl App {
                 SlashCommandResult::Handled
             }
             "/run" => {
-                if arg.is_empty() {
+                let Some((harness, prompt)) = split_first_arg(arg) else {
                     self.push_system_message("Usage: /run <harness> <prompt>");
+                    return SlashCommandResult::Handled;
+                };
+                self.run_harness_prompt(harness, prompt);
+                SlashCommandResult::Handled
+            }
+            "/kill" => {
+                let session_id = if arg.is_empty() {
+                    self.active_session_id.clone()
                 } else {
-                    self.push_system_message(&format!("Running: {arg} (coming soon)"));
+                    Some(arg.to_string())
+                };
+                match session_id {
+                    Some(session_id) => self.kill_session(&session_id),
+                    None => {
+                        self.push_system_message("No active session. Usage: /kill <session-id>")
+                    }
                 }
+                SlashCommandResult::Handled
+            }
+            "/palette" | "/commands" => {
+                self.show_help = !self.show_help;
                 SlashCommandResult::Handled
             }
             "/delegate" => {
@@ -242,6 +301,154 @@ impl App {
                 SlashCommandResult::Handled
             }
             _ => SlashCommandResult::Unknown(cmd),
+        }
+    }
+
+    fn launch_chat_session(&mut self, prompt: &str) {
+        let Some(agent) = self
+            .active_agent
+            .and_then(|idx| self.agents.get(idx))
+            .cloned()
+        else {
+            self.push_system_message(
+                "No active agent. Use /agent to select one, or run `coven doctor`.",
+            );
+            return;
+        };
+        if !agent.available {
+            self.push_system_message(&format!(
+                "{} is not available. Run `coven doctor` to troubleshoot.",
+                agent.label
+            ));
+            return;
+        }
+        self.run_harness_prompt(&agent.harness, prompt);
+    }
+
+    fn run_harness_prompt(&mut self, harness: &str, prompt: &str) {
+        self.is_responding = true;
+        let result = LaunchRequest::for_current_dir(harness, prompt)
+            .and_then(|request| self.client.launch_session(request));
+        self.is_responding = false;
+        match result {
+            Ok(session) => {
+                self.active_session_id = Some(session.id.clone());
+                self.last_event_seq = None;
+                self.reset_event_poll_failures();
+                self.push_system_message(&format!(
+                    "Started daemon session {} ({})",
+                    session.id, session.harness
+                ));
+                self.poll_session_events();
+            }
+            Err(error) => self.push_system_message(&format!("Daemon launch failed: {error}")),
+        }
+    }
+
+    fn forward_input_to_session(&mut self, session_id: &str, raw: &str) {
+        self.is_responding = true;
+        let result = self.client.send_input(session_id, &format!("{raw}\n"));
+        self.is_responding = false;
+        match result {
+            Ok(()) => self.poll_session_events(),
+            Err(error) => self.push_system_message(&format!("Input rejected: {error}")),
+        }
+    }
+
+    pub(super) fn attach_session(&mut self, session_id: &str) {
+        match self.client.get_session(session_id) {
+            Ok(session) => {
+                self.active_session_id = Some(session.id.clone());
+                self.last_event_seq = None;
+                self.reset_event_poll_failures();
+                self.push_system_message(&format!(
+                    "Attached to daemon session {} ({}, {})",
+                    session.id, session.harness, session.status
+                ));
+                self.poll_session_events();
+            }
+            Err(error) => self.push_system_message(&format!("Attach failed: {error}")),
+        }
+    }
+
+    fn kill_session(&mut self, session_id: &str) {
+        match self.client.kill_session(session_id) {
+            Ok(()) => {
+                self.push_system_message(&format!("Kill accepted for session {session_id}."));
+                self.poll_session_events();
+            }
+            Err(error) => self.push_system_message(&format!("Kill failed: {error}")),
+        }
+    }
+
+    pub(super) fn refresh_sessions(&mut self) {
+        match self.client.list_sessions() {
+            Ok(sessions) => self.sessions = sessions,
+            Err(error) => self.push_system_message(&format!("Failed to load sessions: {error}")),
+        }
+    }
+
+    pub(super) fn poll_session_events(&mut self) {
+        let Some(session_id) = self.active_session_id.clone() else {
+            return;
+        };
+        let now = Instant::now();
+        if self
+            .event_poll_backoff_until
+            .is_some_and(|until| until > now)
+        {
+            return;
+        }
+        match self.client.list_events(ChatEventQuery {
+            session_id: &session_id,
+            after_seq: self.last_event_seq,
+            limit: Some(200),
+        }) {
+            Ok(events) => {
+                self.reset_event_poll_failures();
+                for event in events {
+                    self.last_event_seq = Some(event.seq);
+                    self.push_event_message(&event);
+                }
+            }
+            Err(error) => self.record_event_poll_failure(error),
+        }
+    }
+
+    fn reset_event_poll_failures(&mut self) {
+        self.event_poll_backoff_until = None;
+        self.event_poll_failure_streak = 0;
+        self.last_event_poll_error = None;
+    }
+
+    fn record_event_poll_failure(&mut self, error: anyhow::Error) {
+        let message = error.to_string();
+        let repeated_error = self.last_event_poll_error.as_deref() == Some(message.as_str());
+        self.event_poll_failure_streak = self.event_poll_failure_streak.saturating_add(1);
+        self.event_poll_backoff_until =
+            Some(Instant::now() + event_poll_backoff(self.event_poll_failure_streak));
+        self.last_event_poll_error = Some(message.clone());
+        if !repeated_error {
+            self.push_system_message(&format!("Event follow failed: {message}"));
+        }
+    }
+
+    fn push_event_message(&mut self, event: &store::EventRecord) {
+        match event.kind.as_str() {
+            "output" => {
+                if let Some(data) = event_payload_text(event, "data") {
+                    let sender = self.active_agent_label().to_string();
+                    self.push_agent_message(&sender, &data);
+                }
+            }
+            "exit" => {
+                let status =
+                    event_payload_text(event, "status").unwrap_or_else(|| "exited".to_string());
+                self.is_responding = false;
+                self.push_system_message(&format!("Session {status}."));
+            }
+            "kill" => self.push_system_message("Session kill recorded."),
+            _ => {}
         }
     }
 
@@ -292,31 +499,6 @@ impl App {
         self.input_mode = InputMode::Normal;
     }
 
-    fn simulate_agent_response(&mut self, user_msg: &str) {
-        // MVP: show a placeholder response. Real streaming comes in v0.2.
-        let agent_name = self.active_agent_label().to_string();
-        if self.active_agent.is_none() {
-            self.push_system_message(
-                "No active agent. Use /agent to select one, or run `coven doctor`.",
-            );
-            return;
-        }
-
-        self.push_agent_message(
-            &agent_name,
-            &format!(
-                "I received your message: \"{}\"\n\n\
-                 (This is a placeholder response. Real agent streaming will connect \
-                 to the Coven daemon via the session API in v0.2.)\n\n\
-                 To actually run a task, use:\n  \
-                 coven run {} \"{}\"",
-                truncate_str(user_msg, 80),
-                self.active_agent_harness(),
-                truncate_str(user_msg, 60),
-            ),
-        );
-    }
-
     fn export_chat(&mut self) {
         if self.messages.is_empty() {
             self.push_system_message("Nothing to export.");
@@ -361,12 +543,24 @@ impl App {
         if self.last_tick.elapsed() >= Duration::from_millis(120) {
             self.spinner_frame = (self.spinner_frame + 1) % SPINNER_FRAMES.len();
             self.last_tick = Instant::now();
+            self.poll_session_events();
         }
     }
 
     pub(super) fn insert_char(&mut self, c: char) {
         self.input.insert(self.cursor_pos, c);
         self.cursor_pos += c.len_utf8();
+        self.history_index = None;
+    }
+
+    pub(super) fn insert_str(&mut self, value: &str) {
+        self.input.insert_str(self.cursor_pos, value);
+        self.cursor_pos += value.len();
+        self.history_index = None;
+    }
+
+    pub(super) fn insert_newline(&mut self) {
+        self.insert_char('\n');
     }
 
     pub(super) fn delete_char_before_cursor(&mut self) {
@@ -430,6 +624,54 @@ impl App {
         self.input.drain(new_end..self.cursor_pos);
         self.cursor_pos = new_end;
     }
+
+    pub(super) fn history_previous(&mut self) {
+        if self.input_history.is_empty() {
+            return;
+        }
+        let next_index = self
+            .history_index
+            .map(|index| index.saturating_sub(1))
+            .unwrap_or_else(|| self.input_history.len().saturating_sub(1));
+        self.history_index = Some(next_index);
+        self.input = self.input_history[next_index].clone();
+        self.cursor_pos = self.input.len();
+    }
+
+    pub(super) fn history_next(&mut self) {
+        let Some(index) = self.history_index else {
+            return;
+        };
+        if index + 1 >= self.input_history.len() {
+            self.history_index = None;
+            self.input.clear();
+        } else {
+            let next_index = index + 1;
+            self.history_index = Some(next_index);
+            self.input = self.input_history[next_index].clone();
+        }
+        self.cursor_pos = self.input.len();
+    }
+
+    fn record_history(&mut self, raw: &str) {
+        if self.input_history.last().map(|entry| entry.as_str()) != Some(raw) {
+            self.input_history.push(raw.to_string());
+        }
+        self.history_index = None;
+    }
+}
+
+/// Applies a capped exponential backoff so repeated event-poll failures do not
+/// flood the transcript or hammer the daemon when it is unavailable.
+fn event_poll_backoff(streak: u32) -> Duration {
+    let millis = match streak {
+        0 | 1 => 500,
+        2 => 1_000,
+        3 => 2_000,
+        4 => 4_000,
+        _ => 5_000,
+    };
+    Duration::from_millis(millis)
 }
 
 // ── Discover agents from built-in harnesses ────────────────────────────────
@@ -452,35 +694,37 @@ fn timestamp_now() -> String {
     chrono::Local::now().format("%H:%M").to_string()
 }
 
-fn truncate_str(s: &str, max: usize) -> &str {
-    if s.len() <= max {
-        s
-    } else {
-        let end = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
-        &s[..end]
-    }
+fn split_first_arg(input: &str) -> Option<(&str, &str)> {
+    let trimmed = input.trim();
+    let split_idx = trimmed.find(char::is_whitespace)?;
+    let first = &trimmed[..split_idx];
+    let rest = trimmed[split_idx..].trim();
+    (!first.is_empty() && !rest.is_empty()).then_some((first, rest))
+}
+
+fn event_payload_text(event: &store::EventRecord, field: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(&event.payload_json)
+        .ok()?
+        .get(field)?
+        .as_str()
+        .map(ToOwned::to_owned)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::{EventRecord, SessionRecord};
+    use crate::tui::chat::client::{ChatClient, ChatEventQuery, LaunchRequest};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     fn app_with_agents(agents: Vec<AgentInfo>) -> App {
         let active_agent = agents.iter().position(|agent| agent.available);
-        App {
-            messages: Vec::new(),
-            input: String::new(),
-            cursor_pos: 0,
-            scroll_offset: 0,
+        App::new_with_state(
             agents,
             active_agent,
-            input_mode: InputMode::Normal,
-            agent_select_index: 0,
-            show_help: false,
-            spinner_frame: 0,
-            is_responding: false,
-            last_tick: Instant::now(),
-        }
+            Box::new(RecordingChatClient::default()),
+        )
     }
 
     fn agent(id: &str, available: bool) -> AgentInfo {
@@ -489,6 +733,113 @@ mod tests {
             label: id.to_string(),
             harness: id.to_string(),
             available,
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct RecordingChatClient {
+        calls: Rc<RefCell<Vec<String>>>,
+        launched: Rc<RefCell<Vec<LaunchRequest>>>,
+        sessions: Rc<RefCell<Vec<SessionRecord>>>,
+        events: Rc<RefCell<Vec<EventRecord>>>,
+        event_error: Rc<RefCell<Option<String>>>,
+    }
+
+    impl RecordingChatClient {
+        fn with_session(session: SessionRecord) -> Self {
+            let client = Self::default();
+            client.sessions.borrow_mut().push(session);
+            client
+        }
+    }
+
+    impl ChatClient for RecordingChatClient {
+        fn launch_session(&mut self, request: LaunchRequest) -> anyhow::Result<SessionRecord> {
+            self.calls.borrow_mut().push("launch".to_string());
+            self.launched.borrow_mut().push(request.clone());
+            let session = test_session(&request.id, &request.harness, &request.prompt, "running");
+            self.sessions.borrow_mut().push(session.clone());
+            Ok(session)
+        }
+
+        fn get_session(&mut self, session_id: &str) -> anyhow::Result<SessionRecord> {
+            self.calls.borrow_mut().push(format!("get:{session_id}"));
+            self.sessions
+                .borrow()
+                .iter()
+                .find(|session| session.id == session_id)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("session not found"))
+        }
+
+        fn list_sessions(&mut self) -> anyhow::Result<Vec<SessionRecord>> {
+            self.calls.borrow_mut().push("list".to_string());
+            Ok(self.sessions.borrow().clone())
+        }
+
+        fn list_events(&mut self, query: ChatEventQuery<'_>) -> anyhow::Result<Vec<EventRecord>> {
+            self.calls.borrow_mut().push(format!(
+                "events:{}:{}",
+                query.session_id,
+                query.after_seq.unwrap_or(0)
+            ));
+            if let Some(error) = self.event_error.borrow().clone() {
+                return Err(anyhow::anyhow!(error));
+            }
+            Ok(self
+                .events
+                .borrow()
+                .iter()
+                .filter(|event| event.session_id == query.session_id)
+                .filter(|event| query.after_seq.map(|seq| event.seq > seq).unwrap_or(true))
+                .cloned()
+                .collect())
+        }
+
+        fn send_input(&mut self, session_id: &str, data: &str) -> anyhow::Result<()> {
+            self.calls
+                .borrow_mut()
+                .push(format!("input:{session_id}:{data}"));
+            Ok(())
+        }
+
+        fn kill_session(&mut self, session_id: &str) -> anyhow::Result<()> {
+            self.calls.borrow_mut().push(format!("kill:{session_id}"));
+            Ok(())
+        }
+    }
+
+    fn app_with_client(client: RecordingChatClient) -> (App, RecordingChatClient) {
+        let mirror = client.clone();
+        let mut app = App::new_with_client(Box::new(client));
+        app.agents = vec![agent("codex", true), agent("claude", true)];
+        app.active_agent = Some(0);
+        app.messages.clear();
+        (app, mirror)
+    }
+
+    fn test_session(id: &str, harness: &str, title: &str, status: &str) -> SessionRecord {
+        SessionRecord {
+            id: id.to_string(),
+            project_root: "/tmp/project".to_string(),
+            harness: harness.to_string(),
+            title: title.to_string(),
+            status: status.to_string(),
+            exit_code: None,
+            archived_at: None,
+            created_at: "2026-05-19T00:00:00Z".to_string(),
+            updated_at: "2026-05-19T00:00:00Z".to_string(),
+        }
+    }
+
+    fn output_event(seq: i64, session_id: &str, data: &str) -> EventRecord {
+        EventRecord {
+            seq,
+            id: format!("event-{seq}"),
+            session_id: session_id.to_string(),
+            kind: "output".to_string(),
+            payload_json: serde_json::json!({ "data": data }).to_string(),
+            created_at: "2026-05-19T00:00:00Z".to_string(),
         }
     }
 
@@ -541,5 +892,108 @@ mod tests {
             .last()
             .map(|message| message.content.contains("claude is not available"))
             .unwrap_or(false));
+    }
+
+    #[test]
+    fn plain_chat_input_launches_daemon_session_without_mock_response() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.input = "summarize the repo".to_string();
+        app.cursor_pos = app.input.len();
+
+        let result = app.handle_input();
+
+        assert!(matches!(result, Some(SlashCommandResult::Handled)));
+        let launched = mirror.launched.borrow();
+        assert_eq!(launched.len(), 1);
+        assert_eq!(launched[0].harness, "codex");
+        assert_eq!(launched[0].prompt, "summarize the repo");
+        assert!(app.active_session_id().is_some());
+        assert!(app
+            .messages
+            .iter()
+            .any(|message| message.content.contains("Started daemon session")));
+        assert!(!app
+            .messages
+            .iter()
+            .any(|message| message.content.contains("placeholder response")));
+    }
+
+    #[test]
+    fn followup_chat_input_forwards_to_attached_daemon_session() {
+        let client = RecordingChatClient::with_session(test_session(
+            "session-1",
+            "codex",
+            "Existing",
+            "running",
+        ));
+        let (mut app, mirror) = app_with_client(client);
+        app.attach_session("session-1");
+        app.input = "next step".to_string();
+        app.cursor_pos = app.input.len();
+
+        let result = app.handle_input();
+
+        assert!(matches!(result, Some(SlashCommandResult::Handled)));
+        assert!(mirror
+            .calls
+            .borrow()
+            .contains(&"input:session-1:next step\n".to_string()));
+    }
+
+    #[test]
+    fn attach_session_loads_daemon_events_into_transcript() {
+        let client = RecordingChatClient::with_session(test_session(
+            "session-1",
+            "codex",
+            "Existing",
+            "running",
+        ));
+        client
+            .events
+            .borrow_mut()
+            .push(output_event(1, "session-1", "hello from daemon"));
+        let (mut app, mirror) = app_with_client(client);
+
+        app.handle_slash_command("/attach session-1");
+
+        assert_eq!(app.active_session_id(), Some("session-1"));
+        assert!(mirror
+            .calls
+            .borrow()
+            .contains(&"events:session-1:0".to_string()));
+        assert!(app
+            .messages
+            .iter()
+            .any(|message| message.content.contains("hello from daemon")));
+    }
+
+    #[test]
+    fn poll_session_events_backs_off_and_coalesces_repeated_failures() {
+        let client = RecordingChatClient::default();
+        *client.event_error.borrow_mut() = Some("daemon unavailable".to_string());
+        let (mut app, mirror) = app_with_client(client);
+        app.active_session_id = Some("session-1".to_string());
+
+        app.poll_session_events();
+        app.poll_session_events();
+        app.event_poll_backoff_until = Some(Instant::now() - Duration::from_millis(1));
+        app.poll_session_events();
+
+        let calls = mirror.calls.borrow();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| *call == "events:session-1:0")
+                .count(),
+            2
+        );
+        assert_eq!(
+            app.messages
+                .iter()
+                .filter(|message| message.content == "Event follow failed: daemon unavailable")
+                .count(),
+            1
+        );
     }
 }
