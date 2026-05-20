@@ -1098,8 +1098,8 @@ mod tests {
         // `\x08` pops the most recently emitted char so harness output that
         // uses backspace for in-place rewrites (e.g. progress spinners) does
         // not leave the pre-rewrite text in the chat transcript.
-        let cleaned = clean_terminal_output("Hello\x08\x08world")
-            .expect("non-empty after sanitization");
+        let cleaned =
+            clean_terminal_output("Hello\x08\x08world").expect("non-empty after sanitization");
         assert_eq!(cleaned, "Helworld");
     }
 
@@ -1116,8 +1116,8 @@ mod tests {
     fn clean_terminal_output_preserves_tabs_and_newlines() {
         // Tabs and newlines are the only whitespace control chars we keep —
         // they carry layout information harnesses rely on for readability.
-        let cleaned = clean_terminal_output("col1\tcol2\nrow2\tend")
-            .expect("non-empty after sanitization");
+        let cleaned =
+            clean_terminal_output("col1\tcol2\nrow2\tend").expect("non-empty after sanitization");
         assert_eq!(cleaned, "col1\tcol2\nrow2\tend");
     }
 
