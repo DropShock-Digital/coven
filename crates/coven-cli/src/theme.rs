@@ -89,6 +89,20 @@ pub mod brand {
         g: 0x24,
         b: 0x38,
     };
+    /// `--oc-border-subtle` flattened on black: rgba(255,255,255,0.08) →
+    /// 0x14 per channel. Use for unfocused rules and divider lines.
+    pub const BORDER_SUBTLE: Rgb = Rgb {
+        r: 0x14,
+        g: 0x14,
+        b: 0x14,
+    };
+    /// `--oc-border-strong` flattened on black: rgba(255,255,255,0.14) →
+    /// 0x24 per channel. Use for focused rules and emphasized dividers.
+    pub const BORDER_STRONG: Rgb = Rgb {
+        r: 0x24,
+        g: 0x24,
+        b: 0x24,
+    };
 }
 
 // ── Semantic tokens (what callsites import) ──
@@ -118,6 +132,12 @@ pub const BORDER_DIM: Rgb = brand::TEXT_FAINT;
 pub const SCROLL_TRACK: Rgb = brand::SURFACE_3;
 /// Bottom-most canvas color behind every TUI screen.
 pub const BACKDROP: Rgb = brand::SURFACE_0;
+/// Quiet divider line (e.g. unfocused single-rule input area). Mirrors
+/// `--oc-border-subtle` from `brand/ui/color-tokens.css`.
+pub const BORDER_SUBTLE: Rgb = brand::BORDER_SUBTLE;
+/// Emphasized divider line (e.g. focused input area, active rule).
+/// Mirrors `--oc-border-strong`.
+pub const BORDER_STRONG: Rgb = brand::BORDER_STRONG;
 
 // ── Status semantics ──
 
@@ -599,6 +619,17 @@ mod tests {
             flatten_on_black(&vars["--oc-text-faint"]),
             "--oc-text-faint"
         );
+
+        assert_eq!(
+            brand::BORDER_SUBTLE,
+            flatten_on_black(&vars["--oc-border-subtle"]),
+            "--oc-border-subtle"
+        );
+        assert_eq!(
+            brand::BORDER_STRONG,
+            flatten_on_black(&vars["--oc-border-strong"]),
+            "--oc-border-strong"
+        );
     }
 
     #[test]
@@ -620,6 +651,8 @@ mod tests {
         assert_eq!(BORDER_DIM, brand::TEXT_FAINT);
         assert_eq!(SCROLL_TRACK, brand::SURFACE_3);
         assert_eq!(BACKDROP, brand::SURFACE_0);
+        assert_eq!(BORDER_SUBTLE, brand::BORDER_SUBTLE);
+        assert_eq!(BORDER_STRONG, brand::BORDER_STRONG);
     }
 
     #[test]
