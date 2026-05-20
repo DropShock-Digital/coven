@@ -90,7 +90,7 @@ impl SessionRuntime for LiveSessionRuntime {
             &launch.harness,
             &launch.prompt,
             Path::new(&launch.cwd),
-            crate::harness::HarnessLaunchMode::Interactive,
+            launch.launch_mode,
         )?;
         let observer = self
             .coven_home

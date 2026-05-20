@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     api::{EventsResponse, HealthResponse, COVEN_API_NAMED_VERSION},
-    daemon, store,
+    daemon, harness, store,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,6 +22,7 @@ pub(crate) struct LaunchRequest {
     pub(crate) project_root: String,
     pub(crate) cwd: String,
     pub(crate) harness: String,
+    pub(crate) launch_mode: harness::HarnessLaunchMode,
     pub(crate) prompt: String,
     pub(crate) title: String,
 }
@@ -35,6 +36,7 @@ impl LaunchRequest {
             project_root: cwd.clone(),
             cwd,
             harness: harness.to_string(),
+            launch_mode: harness::HarnessLaunchMode::NonInteractive,
             prompt: prompt.to_string(),
             title: session_title(prompt),
         })
@@ -146,6 +148,10 @@ impl ChatClient for DaemonChatClient {
                 "projectRoot": request.project_root,
                 "cwd": request.cwd,
                 "harness": request.harness,
+                "launchMode": match request.launch_mode {
+                    harness::HarnessLaunchMode::Interactive => "interactive",
+                    harness::HarnessLaunchMode::NonInteractive => "nonInteractive",
+                },
                 "prompt": request.prompt,
                 "title": request.title,
             })),

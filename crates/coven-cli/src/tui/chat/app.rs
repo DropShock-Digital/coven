@@ -457,6 +457,9 @@ impl App {
                 let status =
                     event_payload_text(event, "status").unwrap_or_else(|| "exited".to_string());
                 self.is_responding = false;
+                if self.active_session_id.as_deref() == Some(event.session_id.as_str()) {
+                    self.active_session_id = None;
+                }
                 self.push_system_message(&format!("Session {status}."));
             }
             "kill" => self.push_system_message("Session kill recorded."),
@@ -980,6 +983,10 @@ mod tests {
         assert_eq!(launched.len(), 1);
         assert_eq!(launched[0].harness, "codex");
         assert_eq!(launched[0].prompt, "summarize the repo");
+        assert_eq!(
+            launched[0].launch_mode,
+            crate::harness::HarnessLaunchMode::NonInteractive
+        );
         assert!(app.active_session_id().is_some());
         assert!(app
             .messages
@@ -989,6 +996,25 @@ mod tests {
             .messages
             .iter()
             .any(|message| message.content.contains("placeholder response")));
+    }
+
+    #[test]
+    fn completed_chat_session_clears_active_session_so_next_message_launches_cleanly() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+        app.active_session_id = Some("session-1".to_string());
+
+        app.push_event_message(&EventRecord {
+            seq: 1,
+            id: "event-1".to_string(),
+            session_id: "session-1".to_string(),
+            kind: "exit".to_string(),
+            payload_json: serde_json::json!({ "status": "completed" }).to_string(),
+            created_at: "2026-05-19T00:00:00Z".to_string(),
+        });
+
+        assert_eq!(app.active_session_id(), None);
+        assert!(!app.is_responding);
     }
 
     #[test]

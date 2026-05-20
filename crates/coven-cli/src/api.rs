@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::{control_plane, daemon::DaemonStatus, project, store};
+use crate::{control_plane, daemon::DaemonStatus, harness::HarnessLaunchMode, project, store};
 
 const MAX_EVENTS_LIMIT: i64 = 1_000;
 pub const COVEN_API_VERSION: &str = "v1";
@@ -60,6 +60,7 @@ pub struct SessionLaunch {
     pub project_root: String,
     pub cwd: String,
     pub harness: String,
+    pub launch_mode: HarnessLaunchMode,
     pub prompt: String,
     pub title: String,
 }
@@ -274,6 +275,7 @@ fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
         .context("failed to resolve projectRoot")?;
     let canonical_cwd = project::resolve_inside_root(&canonical_project_root, cwd.map(Path::new))?;
     let harness = required_string(&payload, "harness")?;
+    let launch_mode = launch_mode_from_payload(&payload)?;
     let prompt = required_string(&payload, "prompt")?;
     let title = payload
         .get("title")
@@ -287,9 +289,20 @@ fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
         project_root: canonical_project_root.to_string_lossy().into_owned(),
         cwd: canonical_cwd.to_string_lossy().into_owned(),
         harness,
+        launch_mode,
         prompt,
         title,
     })
+}
+
+fn launch_mode_from_payload(payload: &Value) -> Result<HarnessLaunchMode> {
+    match payload.get("launchMode").and_then(Value::as_str) {
+        Some("interactive") | None => Ok(HarnessLaunchMode::Interactive),
+        Some("nonInteractive") => Ok(HarnessLaunchMode::NonInteractive),
+        Some(other) => {
+            anyhow::bail!("launchMode must be `interactive` or `nonInteractive`, got `{other}`")
+        }
+    }
 }
 
 fn required_string(payload: &Value, field: &str) -> Result<String> {
@@ -777,6 +790,10 @@ mod tests {
         assert!(response.body.contains(r#""status":"running""#));
         assert_eq!(runtime.launches.borrow().len(), 1);
         assert_eq!(runtime.launches.borrow()[0].harness, "codex");
+        assert_eq!(
+            runtime.launches.borrow()[0].launch_mode,
+            HarnessLaunchMode::Interactive
+        );
         assert_eq!(runtime.launches.borrow()[0].prompt, "hello coven");
         assert_eq!(
             runtime.launches.borrow()[0].project_root,
@@ -787,6 +804,37 @@ mod tests {
             cwd.canonicalize()?.to_string_lossy()
         );
         assert!(list.body.contains(r#""title":"Demo""#));
+        Ok(())
+    }
+
+    #[test]
+    fn launch_request_accepts_non_interactive_mode_for_plain_chat() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let project_root = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&project_root)?;
+        let runtime = RecordingRuntime::default();
+        let body = json!({
+            "projectRoot": project_root,
+            "harness": "codex",
+            "launchMode": "nonInteractive",
+            "prompt": "hello coven"
+        })
+        .to_string();
+
+        let response = handle_request_with_runtime(
+            "POST",
+            "/sessions",
+            temp_dir.path(),
+            None,
+            Some(&body),
+            &runtime,
+        )?;
+
+        assert_eq!(response.status, 201);
+        assert_eq!(
+            runtime.launches.borrow()[0].launch_mode,
+            HarnessLaunchMode::NonInteractive
+        );
         Ok(())
     }
 

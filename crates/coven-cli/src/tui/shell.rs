@@ -1056,6 +1056,7 @@ fn dispatch_via_daemon(
         project_root: project_root.to_string_lossy().into_owned(),
         cwd: project_root.to_string_lossy().into_owned(),
         harness: harness_id.to_string(),
+        launch_mode: crate::harness::HarnessLaunchMode::Interactive,
         prompt: prompt.to_string(),
         title,
     };
