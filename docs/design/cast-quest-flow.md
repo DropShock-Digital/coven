@@ -27,7 +27,7 @@ Quest
  ├ title         derived from the user's goal (truncated to 60 chars)
  ├ goal          the original free-text request
  ├ phases        Vec<QuestPhase>  (default rhythm: design → implement → verify)
- └ cursor        index of the next non-complete phase
+ └ cursor        index of the next pending phase (skipped/complete are bypassed)
 
 QuestPhase
  ├ name          short identifier: "design" | "implement" | "verify"
@@ -74,14 +74,14 @@ The handoff block is omitted on the first phase. This is the *exact* text the ha
 advance(quest, summary) →
   1. Snapshot the current phase's name + status.
   2. Mark current phase Complete(summary).
-  3. Move cursor forward by one.
+  3. Move cursor to the next pending phase (skipping complete/skipped phases).
   4. If a next pending phase exists:
-       attach QuestHandoff { from_phase, prior_status, reason, carried_context }
-       if !next.edited_by_user: recompose next.sub_prompt
+        attach QuestHandoff { from_phase, prior_status, reason, carried_context }
+        if !next.edited_by_user: recompose next.sub_prompt
   5. Return Some(next_index) or None.
 ```
 
-Failure-flavoured reasons (`"failed"`, `"error"`, `"exit 1"`, `"interrupted"`) produce a different handoff sentence (`"incorporate the failure context before continuing"`) than success (`"carry its result into the next sub-prompt"`). Tests pin this distinction so the user always sees the right framing.
+Failure-flavoured reasons are based on structured phase outcomes (`exit_code != 0` or `exit_status` of `failed`/`error`/`interrupted`) and produce a different handoff sentence (`"incorporate the failure context before continuing"`) than success (`"carry its result into the next sub-prompt"`). Tests pin this distinction so the user always sees the right framing.
 
 User edits via `set_phase_sub_prompt(quest, index, text)` are *sticky*: subsequent advances still attach a handoff (so the user can read why Cast wanted to update the prompt), but the `sub_prompt` text itself is preserved verbatim.
 
