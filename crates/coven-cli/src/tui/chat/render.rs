@@ -20,6 +20,7 @@ use crate::theme::{
 };
 
 use super::app::{App, InputMode, MessageRole, SPINNER_FRAMES};
+use super::highlight;
 
 pub(super) fn render_ui(f: &mut Frame, app: &mut App) {
     let area = f.area();
@@ -50,6 +51,13 @@ pub(super) fn render_ui(f: &mut Frame, app: &mut App) {
     render_messages(f, app, chunks[1]);
     render_input(f, app, chunks[2]);
     render_hint_bar(f, app, chunks[3]);
+
+    // Slash popup floats just above the input box so it never overlaps the
+    // composer. Drawn before help/session overlays so those still take
+    // precedence when both would be visible.
+    if app.slash_popup_is_open() {
+        render_slash_popup(f, app, chunks[2]);
+    }
 
     if app.show_help {
         render_help_overlay(f, area);
@@ -244,12 +252,29 @@ fn append_agent_content_lines<'a>(lines: &mut Vec<Line<'a>>, content: &str, wrap
     let dim_style = theme::ratatui_style(TEXT_DIM);
 
     let mut in_code_block = false;
+    let mut code_lang: Option<highlight::Lang> = None;
+    let mut code_state = highlight::TokenizerState::default();
     let mut last_was_blank = true;
 
     for raw_line in content.lines() {
         let line = raw_line.trim_end_matches(['\r']);
 
-        if line.trim_start().starts_with("```") {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            if !in_code_block {
+                // Opening fence — language tag is the first whitespace-delimited
+                // word after the backticks (e.g. ```rust, ```ts {filename=…}).
+                let tag = trimmed.trim_start_matches('`');
+                code_lang = tag
+                    .split_whitespace()
+                    .next()
+                    .and_then(highlight::tokenizer_for);
+                // Fresh comment/string state per block — never let one block
+                // bleed into the next.
+                code_state = highlight::TokenizerState::default();
+            } else {
+                code_lang = None;
+            }
             in_code_block = !in_code_block;
             // Don't render the fence itself; it carried structure, not text.
             continue;
@@ -262,10 +287,21 @@ fn append_agent_content_lines<'a>(lines: &mut Vec<Line<'a>>, content: &str, wrap
                 line.to_string()
             };
             // Code blocks are verbatim — no inline-markdown parsing inside.
-            lines.push(Line::from(vec![
-                Span::styled("  \u{2502} ", dim_style),
-                Span::styled(visible, text_style),
-            ]));
+            // With a known language tag, hand the visible line to the syntax
+            // tokenizer so keywords/strings/numbers/comments pick up brand
+            // tints; without one, fall back to a single text-styled span.
+            let mut spans = vec![Span::styled("  \u{2502} ", dim_style)];
+            if let Some(lang) = code_lang {
+                spans.extend(highlight::highlight_line(
+                    &visible,
+                    lang,
+                    text_style,
+                    &mut code_state,
+                ));
+            } else {
+                spans.push(Span::styled(visible, text_style));
+            }
+            lines.push(Line::from(spans));
             last_was_blank = false;
             continue;
         }
@@ -526,25 +562,7 @@ fn render_input(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_hint_bar(f: &mut Frame, app: &App, area: Rect) {
-    let hints = if app.input_mode == InputMode::AgentSelect {
-        vec![
-            Span::styled(" \u{2191}\u{2193}", theme::ratatui_style(HINT_KEY).bold()),
-            Span::styled(" navigate  ", theme::ratatui_style(HINT_LABEL)),
-            Span::styled("Enter", theme::ratatui_style(HINT_KEY).bold()),
-            Span::styled(" select  ", theme::ratatui_style(HINT_LABEL)),
-            Span::styled("Esc", theme::ratatui_style(HINT_KEY).bold()),
-            Span::styled(" cancel", theme::ratatui_style(HINT_LABEL)),
-        ]
-    } else {
-        vec![
-            Span::styled(" > ", theme::ratatui_style(HINT_KEY).bold()),
-            Span::styled(
-                "Try \"review this branch\" or /help",
-                theme::ratatui_style(HINT_LABEL),
-            ),
-        ]
-    };
-
+    let hints = hint_bar_spans(app);
     let hint_line = Paragraph::new(Line::from(hints)).style(
         Style::default()
             .bg(theme::ratatui_color(SURFACE))
@@ -553,9 +571,111 @@ fn render_hint_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(hint_line, area);
 }
 
+/// State-driven hint bar. The composer's bottom row changes based on what
+/// the user can usefully press right now — the slash popup, agent picker,
+/// session/help overlay, a pending Cast confirmation, or a live session
+/// each get their own hint set so first-time users discover the surface
+/// area faster than a single static example would let them.
+fn hint_bar_spans<'a>(app: &App) -> Vec<Span<'a>> {
+    fn key(label: &str) -> Span<'static> {
+        Span::styled(label.to_string(), theme::ratatui_style(HINT_KEY).bold())
+    }
+    fn label(text: &str) -> Span<'static> {
+        Span::styled(text.to_string(), theme::ratatui_style(HINT_LABEL))
+    }
+    fn separator() -> Span<'static> {
+        Span::styled("  ", theme::ratatui_style(HINT_LABEL))
+    }
+
+    if app.input_mode == InputMode::AgentSelect {
+        return vec![
+            label(" "),
+            key("\u{2191}\u{2193}"),
+            label(" navigate"),
+            separator(),
+            key("Enter"),
+            label(" select"),
+            separator(),
+            key("Esc"),
+            label(" cancel"),
+        ];
+    }
+
+    if app.show_session_overlay {
+        return vec![
+            label(" "),
+            key("r"),
+            label(" refresh"),
+            separator(),
+            key("Esc"),
+            label(" close"),
+        ];
+    }
+
+    if app.show_help {
+        return vec![label(" "), key("Esc"), label(" close help")];
+    }
+
+    if app.slash_popup_is_open() {
+        return vec![
+            label(" "),
+            key("Tab"),
+            label(" complete"),
+            separator(),
+            key("\u{2191}\u{2193}"),
+            label(" pick"),
+            separator(),
+            key("Enter"),
+            label(" run"),
+            separator(),
+            key("Esc"),
+            label(" close"),
+        ];
+    }
+
+    if app.has_pending_cast_confirmation() {
+        return vec![
+            label(" "),
+            key("accept"),
+            label(" / "),
+            key("reject"),
+            label(" pending Cast confirmation"),
+        ];
+    }
+
+    if app.active_session_id().is_some() {
+        return vec![
+            label(" "),
+            key("Esc"),
+            label(" interrupt"),
+            separator(),
+            key("Ctrl+C"),
+            label(" cancel · twice to exit"),
+        ];
+    }
+
+    // Default: advertise the keys that unlock the rest of the surface
+    // (slash menu, history, help).
+    vec![
+        label(" "),
+        key("/"),
+        label(" commands"),
+        separator(),
+        key("\u{2191}\u{2193}"),
+        label(" history"),
+        separator(),
+        key("Ctrl+K"),
+        label(" help"),
+    ]
+}
+
 fn render_help_overlay(f: &mut Frame, area: Rect) {
     let overlay_width = 60u16.min(area.width.saturating_sub(4));
-    let overlay_height = 22u16.min(area.height.saturating_sub(4));
+    // Fits Basics(5) + Agents(2) + Sessions(4) + Output(3) + Keys(6) +
+    // Advanced(4) plus section headers and separators. Clamps to the
+    // terminal so very short windows still render something useful even if
+    // the bottom rows clip.
+    let overlay_height = 34u16.min(area.height.saturating_sub(4));
     let x = (area.width.saturating_sub(overlay_width)) / 2;
     let y = (area.height.saturating_sub(overlay_height)) / 2;
     let popup_area = Rect::new(x, y, overlay_width, overlay_height);
@@ -595,6 +715,17 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
                 ("/stream", "Toggle live agent streaming (persisted)"),
                 ("/stream on|off", "Force live or batched output"),
                 ("/stream status", "Show current streaming mode"),
+            ],
+        ),
+        (
+            "Keys",
+            vec![
+                ("Tab", "Complete the highlighted slash suggestion"),
+                ("Up / Down", "Browse history or the slash popup"),
+                ("Esc", "Cancel popup, input, or running session"),
+                ("Ctrl+C", "Cancel; press twice within 2s to exit"),
+                ("Ctrl+L", "Clear the visible transcript"),
+                ("Ctrl+D", "Exit Coven chat"),
             ],
         ),
         (
@@ -776,6 +907,86 @@ fn render_session_overlay(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(overlay, popup_area);
 }
 
+/// Floating slash-command autocomplete. Anchored just above the input area so
+/// it acts like a dropdown attached to the composer. Drawn after the input is
+/// painted (so the popup never overlaps the cursor) and before the help and
+/// session overlays so those can still steal focus visually.
+fn render_slash_popup(f: &mut Frame, app: &App, input_area: Rect) {
+    let suggestions = app.slash_suggestions();
+    if suggestions.is_empty() {
+        return;
+    }
+
+    // Show up to 8 rows; chrome adds the border (2) so the visible row count
+    // is the popup height minus 2.
+    let visible_rows = suggestions.len().min(8) as u16;
+    let popup_height = visible_rows.saturating_add(2);
+    // Width the popup to the longest name + summary combo, clamped to the
+    // input width so it never juts past the composer.
+    let preferred_width = suggestions
+        .iter()
+        .map(|cmd| cmd.name.len() + cmd.summary.len() + 6)
+        .max()
+        .unwrap_or(30) as u16;
+    let popup_width = preferred_width
+        .max(28)
+        .min(input_area.width.max(28))
+        .min(60);
+
+    // Anchor under the top of the input box, growing upward.
+    let popup_x = input_area.x;
+    let popup_y = input_area.y.saturating_sub(popup_height);
+    // If there isn't enough room above (very short terminals), bail out — the
+    // user can still complete with Tab; we just skip drawing rather than
+    // overlaying the transcript.
+    if popup_y == input_area.y || popup_height == 0 {
+        return;
+    }
+    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+    f.render_widget(Clear, popup_area);
+
+    let selected = app.slash_suggestion_index.min(suggestions.len() - 1);
+    let items: Vec<ListItem> = suggestions
+        .iter()
+        .enumerate()
+        .map(|(idx, cmd)| {
+            let is_selected = idx == selected;
+            let row_style = if is_selected {
+                theme::ratatui_style(PRIMARY_STRONG)
+                    .bg(theme::ratatui_color(SURFACE_STRONG))
+                    .bold()
+            } else {
+                theme::ratatui_style(PRIMARY)
+            };
+            let summary_style = if is_selected {
+                theme::ratatui_style(TEXT).bg(theme::ratatui_color(SURFACE_STRONG))
+            } else {
+                theme::ratatui_style(TEXT_DIM)
+            };
+            let marker = if is_selected { "▸ " } else { "  " };
+            ListItem::new(Line::from(vec![
+                Span::styled(marker, row_style),
+                Span::styled(format!("{:<10}", cmd.name), row_style),
+                Span::styled("  ", summary_style),
+                Span::styled(cmd.summary, summary_style),
+            ]))
+        })
+        .collect();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme::ratatui_style(PRIMARY))
+        .title(Span::styled(
+            " commands ",
+            theme::ratatui_style(PRIMARY).bold(),
+        ))
+        .style(Style::default().bg(theme::ratatui_color(SURFACE)));
+
+    let list = List::new(items).block(block);
+    f.render_widget(list, popup_area);
+}
+
 fn input_height(app: &App) -> u16 {
     let line_count = input_line_count(&app.input) as u16;
     (line_count + 2).clamp(3, 8)
@@ -862,7 +1073,11 @@ mod tests {
 
         assert!(frame.contains("coven codex"));
         assert!(frame.contains("Ready. Type a task or /help."));
-        assert!(frame.contains("> Try \"review this branch\" or /help"));
+        // Default hint advertises slash menu + history + help keys so a
+        // first-time user can discover the surface without typing /help.
+        assert!(frame.contains("commands"));
+        assert!(frame.contains("history"));
+        assert!(frame.contains("Ctrl+K"));
         assert!(!frame.contains("Commands"));
         assert!(!frame.contains("/start"));
         assert!(!frame.contains("Session browser"));
@@ -892,6 +1107,113 @@ mod tests {
             .any(|line| line.contains("\u{2502} cargo test")));
         assert!(!joined.contains("```"));
         assert!(joined.contains("  Done."));
+    }
+
+    /// Helper: pull a code line out of rendered output. A code-block row
+    /// starts with the bar-prefix span "  │ "; the search needle matches
+    /// against any of the tokenized spans on that row.
+    fn find_code_line<'a>(lines: &'a [Line<'a>], needle: &str) -> Option<&'a Line<'a>> {
+        lines.iter().find(|line| {
+            line.spans.first().map(|s| s.content.as_ref()) == Some("  \u{2502} ")
+                && line.spans.iter().any(|s| s.content.contains(needle))
+        })
+    }
+
+    #[test]
+    fn agent_lines_highlight_rust_code_block_keyword_and_string() {
+        // A ```rust fence should produce many spans per line — the keyword
+        // `let`, the string literal, and surrounding punctuation each land
+        // in their own span instead of one verbatim text run.
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        let content = "Pre.\n```rust\nlet x = \"hi\";\n```\nPost.";
+        append_agent_content_lines(&mut lines, content, 60);
+
+        let code_line = find_code_line(&lines, "let").expect("code line emitted");
+        assert!(
+            code_line.spans.len() >= 4,
+            "expected tokenized spans, got {:#?}",
+            code_line.spans
+        );
+        let let_span = code_line
+            .spans
+            .iter()
+            .find(|s| s.content == "let")
+            .expect("`let` span present");
+        assert!(
+            let_span.style.add_modifier.contains(Modifier::BOLD),
+            "keyword span should carry BOLD modifier"
+        );
+        assert!(
+            code_line.spans.iter().any(|s| s.content == "\"hi\""),
+            "string literal should be its own span"
+        );
+    }
+
+    #[test]
+    fn agent_lines_highlight_typescript_via_ts_alias() {
+        // Confirm the `ts` alias resolves to the JS tokenizer and that
+        // template literals survive as a single string span.
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        let content = "```ts\nconst greet = `hi ${name}`;\n```";
+        append_agent_content_lines(&mut lines, content, 60);
+
+        let code_line = find_code_line(&lines, "const").expect("code line emitted");
+        let const_span = code_line
+            .spans
+            .iter()
+            .find(|s| s.content == "const")
+            .expect("`const` span present");
+        assert!(const_span.style.add_modifier.contains(Modifier::BOLD));
+        assert!(
+            code_line
+                .spans
+                .iter()
+                .any(|s| s.content == "`hi ${name}`"),
+            "template literal should be one string span; got {:#?}",
+            code_line.spans
+        );
+    }
+
+    #[test]
+    fn agent_lines_skip_highlighting_for_unknown_or_missing_language() {
+        // No language tag → fall back to the legacy single-span code line.
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        let content = "```\nlet x = 1;\n```";
+        append_agent_content_lines(&mut lines, content, 60);
+        let code_line = find_code_line(&lines, "let").expect("code line emitted");
+        assert_eq!(
+            code_line.spans.len(),
+            2,
+            "plain code block should be bar + verbatim text only"
+        );
+
+        // Unknown language → same fallback.
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        let content = "```cobol\nDISPLAY 'hi'.\n```";
+        append_agent_content_lines(&mut lines, content, 60);
+        let code_line = find_code_line(&lines, "DISPLAY").expect("code line emitted");
+        assert_eq!(code_line.spans.len(), 2);
+    }
+
+    #[test]
+    fn agent_lines_reset_language_after_close_fence() {
+        // A rust fence followed by an unlabeled fence must not carry the
+        // rust tokenizer into the second block.
+        let mut lines: Vec<Line<'_>> = Vec::new();
+        let content = "```rust\nlet a = 1;\n```\n\n```\nlet b = 2;\n```";
+        append_agent_content_lines(&mut lines, content, 60);
+
+        let mut code_lines: Vec<&Line<'_>> = lines
+            .iter()
+            .filter(|line| {
+                line.spans.first().map(|s| s.content.as_ref()) == Some("  \u{2502} ")
+            })
+            .collect();
+        assert_eq!(code_lines.len(), 2, "expected two code rows");
+        let plain = code_lines.pop().unwrap();
+        let rust = code_lines.pop().unwrap();
+        assert!(rust.spans.len() > 2, "rust row should be tokenized");
+        assert_eq!(plain.spans.len(), 2, "second (unlabeled) row should not");
     }
 
     #[test]

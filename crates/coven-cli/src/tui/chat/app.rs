@@ -86,10 +86,86 @@ pub(super) struct App {
     streaming_mode: StreamingMode,
     pending_agent_buffer: Option<(String, String)>,
     coven_home: Option<PathBuf>,
+    pub(super) slash_suggestion_index: usize,
+    pub(super) slash_popup_dismissed: bool,
+    /// Timestamp of the most recent Ctrl+C press, used to require a double
+    /// tap before exiting so a stray ^C doesn't kill the session.
+    last_interrupt_at: Option<Instant>,
     client: Box<dyn ChatClient>,
 }
 
-pub(super) const SPINNER_FRAMES: &[&str] = &["", "", "", "", "", "", "", ""];
+/// Outcome of a Ctrl+C press routed through [`App::handle_interrupt`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum InterruptOutcome {
+    /// First press (or a press after the arming window expired): the app
+    /// stayed alive but cleared composer/session state.
+    Cancelled,
+    /// Second press within the arming window: the caller should exit.
+    Quit,
+}
+
+const INTERRUPT_REARM_WINDOW: Duration = Duration::from_secs(2);
+
+/// One row in the slash-command autocomplete popup. `name` is what the popup
+/// matches against (including the leading slash) and `summary` is the one-line
+/// description rendered next to it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SlashCommand {
+    pub(super) name: &'static str,
+    pub(super) summary: &'static str,
+}
+
+/// Canonical chat slash commands. Ordering controls display ordering when no
+/// further filtering applies. Aliases share the same entry; the popup matches
+/// by case-insensitive prefix on `name`, so typing `/h` surfaces `/help` (and
+/// any other `/h*` command) without us having to enumerate every alias.
+pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        name: "/help",
+        summary: "Toggle the command palette",
+    },
+    SlashCommand {
+        name: "/clear",
+        summary: "Clear the chat transcript",
+    },
+    SlashCommand {
+        name: "/agent",
+        summary: "Switch agent (no arg = picker)",
+    },
+    SlashCommand {
+        name: "/sessions",
+        summary: "Open the daemon session overlay",
+    },
+    SlashCommand {
+        name: "/attach",
+        summary: "Attach to a daemon session",
+    },
+    SlashCommand {
+        name: "/run",
+        summary: "Launch <harness> <prompt> via daemon",
+    },
+    SlashCommand {
+        name: "/kill",
+        summary: "Stop the active (or named) session",
+    },
+    SlashCommand {
+        name: "/stream",
+        summary: "Toggle live agent streaming",
+    },
+    SlashCommand {
+        name: "/export",
+        summary: "Save the transcript to ~/.coven/exports/",
+    },
+    SlashCommand {
+        name: "/exit",
+        summary: "Quit Coven chat",
+    },
+];
+
+/// Braille dots animate left-to-right; each frame is width-1 so the status-bar
+/// budget stays predictable across NoColor / piped terminals.
+pub(super) const SPINNER_FRAMES: &[&str] =
+    &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 impl App {
     pub(super) fn new() -> Self {
@@ -141,6 +217,9 @@ impl App {
             streaming_mode,
             pending_agent_buffer: None,
             coven_home,
+            slash_suggestion_index: 0,
+            slash_popup_dismissed: false,
+            last_interrupt_at: None,
             client,
         };
 
@@ -328,6 +407,15 @@ impl App {
         Some(SlashCommandResult::Handled)
     }
 
+    /// Clear the visible transcript and reset scroll, matching what `/clear`
+    /// does. Used by Ctrl+L so the keybind doesn't have to fake a slash
+    /// command through the parser.
+    pub(super) fn clear_transcript(&mut self) {
+        self.messages.clear();
+        self.scroll_offset = 0;
+        self.push_system_message("Chat cleared.");
+    }
+
     pub(super) fn handle_slash_command(&mut self, input: &str) -> SlashCommandResult {
         let parts: Vec<&str> = input.splitn(2, char::is_whitespace).collect();
         let cmd = parts[0].to_lowercase();
@@ -339,9 +427,7 @@ impl App {
                 SlashCommandResult::Handled
             }
             "/clear" | "/cls" => {
-                self.messages.clear();
-                self.scroll_offset = 0;
-                self.push_system_message("Chat cleared.");
+                self.clear_transcript();
                 SlashCommandResult::Handled
             }
             "/agent" | "/a" => {
@@ -554,6 +640,63 @@ impl App {
             }
         }
         SlashCommandResult::Handled
+    }
+
+    /// Handle a Ctrl+C press. The first press clears modal/composer state and
+    /// arms an exit confirmation; a second press inside [`INTERRUPT_REARM_WINDOW`]
+    /// returns [`InterruptOutcome::Quit`] so the caller can break out.
+    pub(super) fn handle_interrupt(&mut self) -> InterruptOutcome {
+        let now = Instant::now();
+        if self
+            .last_interrupt_at
+            .is_some_and(|t| now.duration_since(t) <= INTERRUPT_REARM_WINDOW)
+        {
+            return InterruptOutcome::Quit;
+        }
+
+        // First press: cancel everything cancellable, then arm exit.
+        let had_pending = self.cancel_pending_cast_confirmation();
+        let had_input = !self.input.is_empty();
+        let interrupted_session = self.interrupt_active_session();
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.slash_suggestion_index = 0;
+        self.slash_popup_dismissed = false;
+
+        let advisory = if interrupted_session {
+            "Interrupt sent. Press Ctrl+C again to exit."
+        } else if had_pending || had_input {
+            "Cleared. Press Ctrl+C again to exit."
+        } else {
+            "Press Ctrl+C again to exit."
+        };
+        self.push_system_message(advisory);
+
+        self.last_interrupt_at = Some(now);
+        InterruptOutcome::Cancelled
+    }
+
+    /// Best-effort kill of the active daemon session (used by Ctrl+C and Esc).
+    /// Returns true if a session was running and a kill request was sent.
+    pub(super) fn interrupt_active_session(&mut self) -> bool {
+        let Some(session_id) = self.active_session_id.clone() else {
+            return false;
+        };
+        match self.client.kill_session(&session_id) {
+            Ok(()) => {
+                self.push_system_message(&format!("Kill sent to session {session_id}."));
+                self.poll_session_events();
+                true
+            }
+            Err(error) => {
+                self.push_system_message(&format!("Kill failed: {error}"));
+                false
+            }
+        }
+    }
+
+    pub(super) fn has_pending_cast_confirmation(&self) -> bool {
+        self.pending_cast_confirmation.is_some()
     }
 
     pub(super) fn cancel_pending_cast_confirmation(&mut self) -> bool {
@@ -881,12 +1024,14 @@ impl App {
         self.input.insert(self.cursor_pos, c);
         self.cursor_pos += c.len_utf8();
         self.history_index = None;
+        self.reset_slash_popup_state_on_edit();
     }
 
     pub(super) fn insert_str(&mut self, value: &str) {
         self.input.insert_str(self.cursor_pos, value);
         self.cursor_pos += value.len();
         self.history_index = None;
+        self.reset_slash_popup_state_on_edit();
     }
 
     pub(super) fn insert_newline(&mut self) {
@@ -902,12 +1047,14 @@ impl App {
                 .unwrap_or(0);
             self.cursor_pos -= prev;
             self.input.remove(self.cursor_pos);
+            self.reset_slash_popup_state_on_edit();
         }
     }
 
     pub(super) fn delete_char_at_cursor(&mut self) {
         if self.cursor_pos < self.input.len() {
             self.input.remove(self.cursor_pos);
+            self.reset_slash_popup_state_on_edit();
         }
     }
 
@@ -953,6 +1100,85 @@ impl App {
             .unwrap_or(0);
         self.input.drain(new_end..self.cursor_pos);
         self.cursor_pos = new_end;
+        self.reset_slash_popup_state_on_edit();
+    }
+
+    pub(super) fn slash_suggestions(&self) -> Vec<&'static SlashCommand> {
+        if self.slash_popup_dismissed {
+            return Vec::new();
+        }
+        let raw = self.input.as_str();
+        if !raw.starts_with('/') {
+            return Vec::new();
+        }
+        // Once an argument starts (whitespace anywhere), the popup steps out
+        // of the way so the user can type freely. Newlines count too — they
+        // appear in multi-line input bodies.
+        if raw.chars().any(char::is_whitespace) {
+            return Vec::new();
+        }
+        let prefix = raw.to_ascii_lowercase();
+        SLASH_COMMANDS
+            .iter()
+            .filter(|cmd| cmd.name.starts_with(prefix.as_str()))
+            .collect()
+    }
+
+    pub(super) fn slash_popup_is_open(&self) -> bool {
+        !self.slash_suggestions().is_empty()
+    }
+
+    pub(super) fn slash_popup_select_next(&mut self) {
+        let len = self.slash_suggestions().len();
+        if len <= 1 {
+            return;
+        }
+        self.slash_suggestion_index = (self.slash_suggestion_index + 1) % len;
+    }
+
+    pub(super) fn slash_popup_select_prev(&mut self) {
+        let len = self.slash_suggestions().len();
+        if len <= 1 {
+            return;
+        }
+        self.slash_suggestion_index = if self.slash_suggestion_index == 0 {
+            len - 1
+        } else {
+            self.slash_suggestion_index - 1
+        };
+    }
+
+    /// Replace the current input with the selected suggestion and a trailing
+    /// space so the user can immediately start typing an argument. Returns
+    /// true if a completion happened.
+    pub(super) fn apply_slash_suggestion(&mut self) -> bool {
+        let suggestions = self.slash_suggestions();
+        if suggestions.is_empty() {
+            return false;
+        }
+        let idx = self.slash_suggestion_index.min(suggestions.len() - 1);
+        let pick = suggestions[idx];
+        // If the input already exactly matches the selection (modulo case),
+        // there's nothing to complete — let the caller fall through so the
+        // command actually runs on Enter.
+        if self.input.eq_ignore_ascii_case(pick.name) {
+            return false;
+        }
+        self.input.clear();
+        self.input.push_str(pick.name);
+        self.input.push(' ');
+        self.cursor_pos = self.input.len();
+        self.slash_suggestion_index = 0;
+        true
+    }
+
+    pub(super) fn dismiss_slash_popup(&mut self) {
+        self.slash_popup_dismissed = true;
+    }
+
+    fn reset_slash_popup_state_on_edit(&mut self) {
+        self.slash_suggestion_index = 0;
+        self.slash_popup_dismissed = false;
     }
 
     pub(super) fn history_previous(&mut self) {
@@ -2158,6 +2384,20 @@ mod tests {
     }
 
     #[test]
+    fn spinner_frames_render_visible_glyphs_so_responding_never_looks_dead() {
+        // Regression guard: the table was previously eight empty strings,
+        // which made the status bar render "responding..." with no animation
+        // at all. Real frames must carry at least one visible grapheme each.
+        assert!(!SPINNER_FRAMES.is_empty());
+        for (idx, frame) in SPINNER_FRAMES.iter().enumerate() {
+            assert!(
+                frame.chars().any(|c| !c.is_whitespace()),
+                "spinner frame {idx} is blank ({frame:?}); spinner would look frozen",
+            );
+        }
+    }
+
+    #[test]
     fn status_bar_keeps_composing_indicator_at_eighty_columns() {
         use ratatui::{backend::TestBackend, Terminal};
 
@@ -2330,5 +2570,205 @@ mod tests {
         assert!(is_chat_local_slash("/stream"));
         assert!(is_chat_local_slash("/stream off"));
         assert!(is_chat_local_slash("/streaming on"));
+    }
+
+    #[test]
+    fn slash_popup_only_opens_when_input_is_a_slash_prefix_without_arguments() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+
+        // Empty input: no popup
+        assert!(!app.slash_popup_is_open());
+
+        // Slash prefix: popup shows
+        app.input = "/he".to_string();
+        app.cursor_pos = app.input.len();
+        assert!(app.slash_popup_is_open());
+        let suggestions = app.slash_suggestions();
+        assert!(suggestions.iter().any(|cmd| cmd.name == "/help"));
+
+        // Argument started: popup closes so the user can type freely.
+        app.input = "/run codex".to_string();
+        app.cursor_pos = app.input.len();
+        assert!(!app.slash_popup_is_open());
+
+        // Non-slash input: no popup at all.
+        app.input = "hello world".to_string();
+        app.cursor_pos = app.input.len();
+        assert!(!app.slash_popup_is_open());
+    }
+
+    #[test]
+    fn slash_popup_filters_case_insensitively_by_prefix() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+
+        app.input = "/CL".to_string();
+        app.cursor_pos = app.input.len();
+        let suggestions = app.slash_suggestions();
+        let names: Vec<&str> = suggestions.iter().map(|cmd| cmd.name).collect();
+        assert_eq!(names, vec!["/clear"]);
+    }
+
+    #[test]
+    fn apply_slash_suggestion_completes_into_input_and_adds_trailing_space() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+
+        app.input = "/he".to_string();
+        app.cursor_pos = app.input.len();
+        // First suggestion for /he* should be /help.
+        let applied = app.apply_slash_suggestion();
+        assert!(applied);
+        assert_eq!(app.input, "/help ");
+        assert_eq!(app.cursor_pos, app.input.len());
+        // After completion the popup auto-closes because the input now
+        // contains whitespace.
+        assert!(!app.slash_popup_is_open());
+    }
+
+    #[test]
+    fn apply_slash_suggestion_is_no_op_when_input_already_matches_selection() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+
+        app.input = "/help".to_string();
+        app.cursor_pos = app.input.len();
+        // Exact match shouldn't re-complete (which would let Enter still run
+        // the command normally).
+        let applied = app.apply_slash_suggestion();
+        assert!(!applied);
+        assert_eq!(app.input, "/help");
+    }
+
+    #[test]
+    fn slash_popup_navigation_wraps_around_the_filtered_list() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+
+        // Typing just `/` should surface every command.
+        app.input = "/".to_string();
+        app.cursor_pos = app.input.len();
+        let total = app.slash_suggestions().len();
+        assert!(total >= 2);
+
+        for _ in 0..total {
+            app.slash_popup_select_next();
+        }
+        assert_eq!(app.slash_suggestion_index, 0, "next should wrap to start");
+
+        app.slash_popup_select_prev();
+        assert_eq!(
+            app.slash_suggestion_index,
+            total - 1,
+            "prev from top should wrap to last entry",
+        );
+    }
+
+    #[test]
+    fn clear_transcript_drops_messages_resets_scroll_and_logs_a_marker() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+        app.push_user_message("hello");
+        app.push_agent_message("codex", "world");
+        app.scroll_offset = 12;
+
+        app.clear_transcript();
+
+        // The only remaining message should be the "Chat cleared." marker.
+        assert_eq!(app.messages.len(), 1);
+        assert!(matches!(app.messages[0].role, MessageRole::System));
+        assert!(app.messages[0].content.contains("Chat cleared"));
+        assert_eq!(app.scroll_offset, 0);
+    }
+
+    #[test]
+    fn handle_interrupt_first_press_clears_input_and_arms_exit_advisory() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+        app.input = "in-flight prompt".to_string();
+        app.cursor_pos = app.input.len();
+
+        let outcome = app.handle_interrupt();
+
+        assert_eq!(outcome, InterruptOutcome::Cancelled);
+        assert!(app.input.is_empty());
+        assert_eq!(app.cursor_pos, 0);
+        assert!(app
+            .messages
+            .iter()
+            .any(|message| message.content.contains("Press Ctrl+C again to exit")));
+    }
+
+    #[test]
+    fn second_ctrl_c_within_window_returns_quit() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+
+        assert_eq!(app.handle_interrupt(), InterruptOutcome::Cancelled);
+        // Without waiting (so we stay inside the rearm window), a second
+        // press should request quit.
+        assert_eq!(app.handle_interrupt(), InterruptOutcome::Quit);
+    }
+
+    #[test]
+    fn interrupt_with_active_session_sends_kill_to_daemon() {
+        let session = test_session("abc-123", "codex", "task", "running");
+        let client = RecordingChatClient::with_session(session.clone());
+        let calls = client.calls.clone();
+        let (mut app, _) = app_with_client(client);
+        app.active_session_id = Some(session.id.clone());
+
+        assert_eq!(app.handle_interrupt(), InterruptOutcome::Cancelled);
+
+        let recorded = calls.borrow().clone();
+        assert!(
+            recorded.iter().any(|call| call == "kill:abc-123"),
+            "expected kill to be sent on Ctrl+C, got: {recorded:?}",
+        );
+        assert!(app
+            .messages
+            .iter()
+            .any(|message| message.content.contains("Interrupt sent")));
+    }
+
+    #[test]
+    fn esc_path_kills_active_session_when_nothing_else_to_cancel() {
+        let session = test_session("xyz-9", "claude", "task", "running");
+        let client = RecordingChatClient::with_session(session.clone());
+        let calls = client.calls.clone();
+        let (mut app, _) = app_with_client(client);
+        app.active_session_id = Some(session.id.clone());
+
+        // Mirror the event-loop arm: with empty input and no popup, Esc
+        // should reach interrupt_active_session.
+        assert!(app.input.is_empty());
+        assert!(!app.slash_popup_is_open());
+
+        let interrupted = app.interrupt_active_session();
+        assert!(interrupted);
+
+        let recorded = calls.borrow().clone();
+        assert!(
+            recorded.iter().any(|call| call == "kill:xyz-9"),
+            "expected kill call from Esc-style interrupt, got: {recorded:?}",
+        );
+    }
+
+    #[test]
+    fn dismissing_the_slash_popup_keeps_it_closed_until_input_edits() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+
+        app.input = "/he".to_string();
+        app.cursor_pos = app.input.len();
+        assert!(app.slash_popup_is_open());
+
+        app.dismiss_slash_popup();
+        assert!(!app.slash_popup_is_open());
+
+        // Typing another char should re-open it — dismissal is single-shot.
+        app.insert_char('l');
+        assert!(app.slash_popup_is_open());
     }
 }

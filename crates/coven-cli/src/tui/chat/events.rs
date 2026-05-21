@@ -8,7 +8,7 @@ use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{backend::CrosstermBackend, Terminal};
 
-use super::app::{App, InputMode, SlashCommandResult};
+use super::app::{App, InputMode, InterruptOutcome, SlashCommandResult};
 use super::render::render_ui;
 
 pub(super) fn run_event_loop(
@@ -71,6 +71,20 @@ pub(super) fn run_event_loop(
                         KeyCode::Enter if key.modifiers.contains(KeyModifiers::SHIFT) => {
                             app.insert_newline();
                         }
+                        // Tab completes the highlighted slash-command suggestion
+                        // when the popup is open, or otherwise inserts a literal
+                        // tab so multi-line composer pastes still survive.
+                        KeyCode::Tab => {
+                            if app.slash_popup_is_open() {
+                                app.apply_slash_suggestion();
+                            } else {
+                                app.insert_char('\t');
+                            }
+                        }
+                        // Enter completes the suggestion if the input is still
+                        // a partial command; otherwise it submits as usual.
+                        KeyCode::Enter
+                            if app.slash_popup_is_open() && app.apply_slash_suggestion() => {}
                         KeyCode::Enter => match app.handle_input() {
                             Some(SlashCommandResult::Quit) => return Ok(()),
                             Some(SlashCommandResult::Unknown(cmd)) => {
@@ -78,14 +92,28 @@ pub(super) fn run_event_loop(
                             }
                             _ => {}
                         },
+                        // First Ctrl+C cancels the current activity (modal,
+                        // input, or running session) and arms an exit prompt.
+                        // A second Ctrl+C within ~2s actually exits — matches
+                        // Claude Code's safety net against stray ^C presses.
                         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            return Ok(());
+                            if matches!(app.handle_interrupt(), InterruptOutcome::Quit) {
+                                return Ok(());
+                            }
                         }
+                        // Ctrl+D is the explicit "I want out" shortcut — no
+                        // double-tap because it's typed deliberately on an
+                        // empty line, the way shells treat EOF.
                         KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             return Ok(());
                         }
                         KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             app.show_help = !app.show_help;
+                        }
+                        // Ctrl+L = clear the visible transcript, the standard
+                        // shell/Claude-Code muscle-memory keybind.
+                        KeyCode::Char('l') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            app.clear_transcript();
                         }
                         KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             app.delete_word_before_cursor();
@@ -121,6 +149,12 @@ pub(super) fn run_event_loop(
                         KeyCode::End => {
                             app.move_cursor_end();
                         }
+                        KeyCode::Up if app.slash_popup_is_open() => {
+                            app.slash_popup_select_prev();
+                        }
+                        KeyCode::Down if app.slash_popup_is_open() => {
+                            app.slash_popup_select_next();
+                        }
                         KeyCode::Up if !app.input_history.is_empty() => {
                             app.history_previous();
                         }
@@ -137,9 +171,20 @@ pub(super) fn run_event_loop(
                             // Will be clamped during render
                         }
                         KeyCode::Esc if app.cancel_pending_cast_confirmation() => {}
+                        // Esc dismisses the slash-command popup before it
+                        // touches the input — typing more re-opens it.
+                        KeyCode::Esc if app.slash_popup_is_open() => {
+                            app.dismiss_slash_popup();
+                        }
                         KeyCode::Esc if !app.input.is_empty() => {
                             app.input.clear();
                             app.cursor_pos = 0;
+                        }
+                        // With nothing left to cancel locally, Esc interrupts
+                        // the running daemon session — same effect as `/kill`
+                        // with the active session id.
+                        KeyCode::Esc => {
+                            app.interrupt_active_session();
                         }
                         _ => {}
                     }
