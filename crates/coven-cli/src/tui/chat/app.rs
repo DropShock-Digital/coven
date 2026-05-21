@@ -1023,7 +1023,7 @@ mod tests {
         app.push_event_message(&EventRecord {
             seq: 1,
             id: "event-1".to_string(),
-            session_id,
+            session_id: session_id.to_string(),
             kind: "exit".to_string(),
             payload_json: serde_json::json!({ "status": "completed" }).to_string(),
             created_at: "2026-05-19T00:00:00Z".to_string(),
