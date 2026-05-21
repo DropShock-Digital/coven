@@ -742,10 +742,16 @@ fn tokenize_yaml(line: &str, _state: &mut TokenizerState) -> Vec<Token> {
 
     while i < bytes.len() {
         let b = bytes[i];
-        if b == b'#' {
+        if b == b'#' && (i == 0 || bytes[i - 1].is_ascii_whitespace()) {
             flush_buf(&mut buf, &mut out);
             out.push(tok(&line[i..], Role::Comment));
             return out;
+        }
+        if b == b'~' {
+            flush_buf(&mut buf, &mut out);
+            out.push(tok("~", Role::Keyword));
+            i += 1;
+            continue;
         }
         // Quoted scalar — either `'…'` or `"…"`. Treat as String.
         if b == b'"' {
@@ -823,7 +829,7 @@ fn tokenize_yaml(line: &str, _state: &mut TokenizerState) -> Vec<Token> {
                 Role::Attribute
             } else if matches!(
                 ident.to_ascii_lowercase().as_str(),
-                "true" | "false" | "null" | "yes" | "no" | "on" | "off" | "~"
+                "true" | "false" | "null" | "yes" | "no" | "on" | "off"
             ) {
                 Role::Keyword
             } else {
@@ -1687,6 +1693,24 @@ mod tests {
     fn yaml_line_comment_colors_to_end_of_line() {
         let toks = roles_of("port: 8080  # default", Lang::Yaml);
         assert_eq!(find_role(&toks, "# default").1, Role::Comment);
+    }
+
+    #[test]
+    fn yaml_hash_inside_plain_scalar_is_not_a_comment() {
+        let toks = roles_of("url: http://x#frag", Lang::Yaml);
+        assert!(!toks.iter().any(|(_, role)| *role == Role::Comment));
+        assert_eq!(
+            toks.iter()
+                .map(|(text, _)| text.as_str())
+                .collect::<String>(),
+            "url: http://x#frag"
+        );
+    }
+
+    #[test]
+    fn yaml_tilde_null_literal_is_keyword() {
+        let toks = roles_of("empty: ~", Lang::Yaml);
+        assert_eq!(find_role(&toks, "~").1, Role::Keyword);
     }
 
     #[test]
