@@ -1,7 +1,9 @@
 //! Daemon-backed chat client for the rich TUI.
 //!
-//! This module intentionally stays thin: the daemon owns session launch,
-//! cwd validation, input delivery, kill, persistence, and structured errors.
+//! This module intentionally stays thin: the daemon owns live session launch,
+//! cwd validation, input delivery, kill, and structured errors. Local session
+//! ritual verbs use the shared store path/timestamp helpers because they are
+//! ledger-only mutations.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -13,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     api::{EventsResponse, HealthResponse, COVEN_API_NAMED_VERSION},
-    daemon, harness, store,
+    current_timestamp, daemon, harness, store, STORE_FILE_NAME,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +59,9 @@ pub(crate) trait ChatClient {
     fn list_events(&mut self, query: ChatEventQuery<'_>) -> Result<Vec<store::EventRecord>>;
     fn send_input(&mut self, session_id: &str, data: &str) -> Result<()>;
     fn kill_session(&mut self, session_id: &str) -> Result<()>;
+    fn archive_session(&mut self, session_id: &str) -> Result<()>;
+    fn summon_session(&mut self, session_id: &str) -> Result<store::SessionRecord>;
+    fn sacrifice_session(&mut self, session_id: &str) -> Result<()>;
 }
 
 pub(crate) struct DaemonChatClient {
@@ -86,6 +91,14 @@ impl DaemonChatClient {
 }
 
 impl DaemonChatClient {
+    fn store_path(&self) -> PathBuf {
+        self.coven_home.join(STORE_FILE_NAME)
+    }
+
+    fn open_store(&self) -> Result<rusqlite::Connection> {
+        store::open_store(&self.store_path())
+    }
+
     fn request_json<T: for<'de> Deserialize<'de>>(
         &mut self,
         method: &str,
@@ -192,6 +205,43 @@ impl ChatClient for DaemonChatClient {
             &format!("/api/v1/sessions/{session_id}/kill"),
             Some(json!({})),
         )
+    }
+
+    fn archive_session(&mut self, session_id: &str) -> Result<()> {
+        let conn = self.open_store()?;
+        let Some(session) = store::get_session(&conn, session_id)? else {
+            anyhow::bail!("session `{session_id}` not found");
+        };
+        if session.status == "running" {
+            anyhow::bail!("session `{session_id}` is still running; stop it before archiving");
+        }
+        store::archive_session(&conn, session_id, &current_timestamp())
+    }
+
+    fn summon_session(&mut self, session_id: &str) -> Result<store::SessionRecord> {
+        let conn = self.open_store()?;
+        let Some(session) = store::get_session(&conn, session_id)? else {
+            anyhow::bail!("session `{session_id}` not found");
+        };
+        if session.archived_at.is_some() {
+            store::summon_session(&conn, session_id, &current_timestamp())?;
+            let Some(session) = store::get_session(&conn, session_id)? else {
+                anyhow::bail!("session `{session_id}` not found");
+            };
+            return Ok(session);
+        }
+        Ok(session)
+    }
+
+    fn sacrifice_session(&mut self, session_id: &str) -> Result<()> {
+        let conn = self.open_store()?;
+        let Some(session) = store::get_session(&conn, session_id)? else {
+            anyhow::bail!("session `{session_id}` not found");
+        };
+        if session.status == "running" {
+            anyhow::bail!("session `{session_id}` is still running; do not sacrifice live work");
+        }
+        store::sacrifice_session(&conn, session_id)
     }
 }
 
