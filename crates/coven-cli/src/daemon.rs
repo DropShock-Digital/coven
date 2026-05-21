@@ -265,6 +265,20 @@ pub fn start_background_server(
     Ok(status)
 }
 
+pub fn ensure_background_server(
+    coven_home: &Path,
+    current_exe: &Path,
+    started_at: String,
+) -> Result<DaemonStatus> {
+    ensure_background_server_with_controllers(
+        coven_home,
+        current_exe,
+        started_at,
+        &SystemDaemonStopController,
+        &SystemDaemonStartController,
+    )
+}
+
 pub fn recover_orphaned_sessions(coven_home: &Path, updated_at: &str) -> Result<usize> {
     let conn = crate::store::open_store(&coven_home.join("coven.sqlite3"))?;
     crate::store::mark_running_sessions_orphaned(&conn, updated_at)
@@ -318,6 +332,49 @@ trait DaemonStopController {
 }
 
 struct SystemDaemonStopController;
+
+trait DaemonStartController {
+    fn start_background_server(
+        &self,
+        coven_home: &Path,
+        current_exe: &Path,
+        started_at: String,
+    ) -> Result<DaemonStatus>;
+    fn wait_for_running_daemon(&self, status: &DaemonStatus, timeout: Duration) -> bool;
+}
+
+struct SystemDaemonStartController;
+
+impl DaemonStartController for SystemDaemonStartController {
+    fn start_background_server(
+        &self,
+        coven_home: &Path,
+        current_exe: &Path,
+        started_at: String,
+    ) -> Result<DaemonStatus> {
+        start_background_server(coven_home, current_exe, started_at)
+    }
+
+    fn wait_for_running_daemon(&self, status: &DaemonStatus, timeout: Duration) -> bool {
+        #[cfg(unix)]
+        {
+            let deadline = Instant::now() + timeout;
+            while Instant::now() < deadline {
+                if daemon_health_reports_pid(&status.socket, status.pid).unwrap_or(false) {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            daemon_health_reports_pid(&status.socket, status.pid).unwrap_or(false)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = status;
+            let _ = timeout;
+            true
+        }
+    }
+}
 
 impl DaemonStopController for SystemDaemonStopController {
     fn signal_term(&self, pid: u32) -> Result<()> {
@@ -456,6 +513,34 @@ fn background_server_status_with_controller(
 
     clear_status_and_socket(coven_home)?;
     Ok(None)
+}
+
+fn ensure_background_server_with_controllers(
+    coven_home: &Path,
+    current_exe: &Path,
+    started_at: String,
+    status_controller: &dyn DaemonStopController,
+    start_controller: &dyn DaemonStartController,
+) -> Result<DaemonStatus> {
+    match background_server_status_with_controller(coven_home, status_controller)? {
+        Some(DaemonStatusState::Running(status)) => Ok(status),
+        Some(DaemonStatusState::Stale(status)) => anyhow::bail!(
+            "Coven daemon pid {} is recorded but unreachable; run `coven daemon restart`",
+            status.pid
+        ),
+        None => {
+            let status =
+                start_controller.start_background_server(coven_home, current_exe, started_at)?;
+            if start_controller.wait_for_running_daemon(&status, Duration::from_secs(2)) {
+                Ok(status)
+            } else {
+                anyhow::bail!(
+                    "started Coven daemon pid {} but its socket did not become ready",
+                    status.pid
+                )
+            }
+        }
+    }
 }
 
 fn is_daemon_status_parse_error(error: &anyhow::Error) -> bool {
@@ -983,6 +1068,70 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn ensure_background_server_starts_when_no_daemon_status_exists() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let started = std::sync::Arc::new(std::sync::Mutex::new(0));
+        let start_controller = FakeStartController {
+            started: started.clone(),
+            running_after_start: true,
+        };
+
+        let status = ensure_background_server_with_controllers(
+            temp_dir.path(),
+            Path::new("/usr/bin/coven"),
+            "2026-04-27T10:00:00Z".to_string(),
+            &FakeStopController {
+                pid_alive: false,
+                exited_after_signal: false,
+                signal_error: None,
+                verified_daemon: false,
+                signaled: std::sync::Arc::default(),
+            },
+            &start_controller,
+        )?;
+
+        assert_eq!(*started.lock().unwrap(), 1);
+        assert_eq!(status.pid, 54321);
+        assert_eq!(read_status(temp_dir.path())?, Some(status));
+        Ok(())
+    }
+
+    #[test]
+    fn ensure_background_server_reuses_verified_running_daemon() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let status = DaemonStatus {
+            pid: 12345,
+            started_at: "2026-04-27T10:00:00Z".to_string(),
+            socket: daemon_socket_path(temp_dir.path())
+                .to_string_lossy()
+                .into_owned(),
+        };
+        write_status(temp_dir.path(), &status)?;
+        let started = std::sync::Arc::new(std::sync::Mutex::new(0));
+
+        let ensured = ensure_background_server_with_controllers(
+            temp_dir.path(),
+            Path::new("/usr/bin/coven"),
+            "2026-04-27T10:00:00Z".to_string(),
+            &FakeStopController {
+                pid_alive: true,
+                exited_after_signal: false,
+                signal_error: None,
+                verified_daemon: true,
+                signaled: std::sync::Arc::default(),
+            },
+            &FakeStartController {
+                started: started.clone(),
+                running_after_start: true,
+            },
+        )?;
+
+        assert_eq!(ensured, status);
+        assert_eq!(*started.lock().unwrap(), 0);
+        Ok(())
+    }
+
     struct FakeStopController {
         pid_alive: bool,
         exited_after_signal: bool,
@@ -1010,6 +1159,35 @@ mod tests {
 
         fn status_matches_running_daemon(&self, _status: &DaemonStatus) -> bool {
             self.verified_daemon
+        }
+    }
+
+    struct FakeStartController {
+        started: std::sync::Arc<std::sync::Mutex<usize>>,
+        running_after_start: bool,
+    }
+
+    impl DaemonStartController for FakeStartController {
+        fn start_background_server(
+            &self,
+            coven_home: &Path,
+            _current_exe: &Path,
+            started_at: String,
+        ) -> Result<DaemonStatus> {
+            *self.started.lock().unwrap() += 1;
+            let status = DaemonStatus {
+                pid: 54321,
+                started_at,
+                socket: daemon_socket_path(coven_home)
+                    .to_string_lossy()
+                    .into_owned(),
+            };
+            write_status(coven_home, &status)?;
+            Ok(status)
+        }
+
+        fn wait_for_running_daemon(&self, _status: &DaemonStatus, _timeout: Duration) -> bool {
+            self.running_after_start
         }
     }
 

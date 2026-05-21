@@ -492,7 +492,7 @@ impl App {
             Err(error) => {
                 self.is_responding = false;
                 self.push_system_message(&format!(
-                    "Daemon launch failed: {error}. Start it with `coven daemon start`, then retry."
+                    "Daemon launch failed: {error}. Run `coven daemon status` to inspect it; use `coven daemon restart` if it remains unreachable."
                 ));
                 None
             }
@@ -1345,7 +1345,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_launch_failure_surfaces_start_guidance_inline() {
+    fn daemon_launch_failure_surfaces_status_guidance_inline() {
         let client = RecordingChatClient::default();
         *client.launch_error.borrow_mut() = Some("connection refused".to_string());
         let (mut app, _) = app_with_client(client);
@@ -1357,7 +1357,8 @@ mod tests {
         assert!(app.messages.iter().any(|message| message
             .content
             .contains("Daemon launch failed: connection refused")
-            && message.content.contains("coven daemon start")));
+            && message.content.contains("coven daemon status")
+            && !message.content.contains("coven daemon start")));
     }
 
     #[test]

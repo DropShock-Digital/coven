@@ -1036,17 +1036,12 @@ enum DaemonRuntimeState {
 
 fn daemon_runtime_state() -> Result<DaemonRuntimeState> {
     let home = coven_home_dir()?;
-    match daemon::background_server_status(&home)? {
-        Some(daemon::DaemonStatusState::Running(_)) => Ok(DaemonRuntimeState::Running),
-        Some(daemon::DaemonStatusState::Stale(_)) => Ok(DaemonRuntimeState::NotReady(
-            "the local Coven daemon is recorded but unreachable; run `coven daemon restart`"
-                .to_string(),
-        )),
-        None => Ok(DaemonRuntimeState::NotReady(
-            "the local Coven daemon is not running; run `coven daemon start` to enable Cast's \
-             event follower"
-                .to_string(),
-        )),
+    let current_exe = std::env::current_exe().context("failed to resolve current executable")?;
+    match daemon::ensure_background_server(&home, &current_exe, current_timestamp()) {
+        Ok(_) => Ok(DaemonRuntimeState::Running),
+        Err(error) => Ok(DaemonRuntimeState::NotReady(format!(
+            "the local Coven daemon could not be started or reached: {error}"
+        ))),
     }
 }
 

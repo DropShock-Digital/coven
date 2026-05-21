@@ -134,6 +134,10 @@ impl DaemonChatClient {
             return Ok(());
         }
 
+        let current_exe =
+            std::env::current_exe().context("failed to resolve current executable")?;
+        daemon::ensure_background_server(&self.coven_home, &current_exe, current_timestamp())
+            .context("failed to start Coven daemon")?;
         let response = self.raw_request("GET", "/api/v1/health", None)?;
         let health: HealthResponse = serde_json::from_str(&response.body).with_context(|| {
             format!(
