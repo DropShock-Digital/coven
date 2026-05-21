@@ -1,7 +1,9 @@
 //! Daemon-backed chat client for the rich TUI.
 //!
-//! This module intentionally stays thin: the daemon owns session launch,
-//! cwd validation, input delivery, kill, persistence, and structured errors.
+//! This module intentionally stays thin: the daemon owns live session launch,
+//! cwd validation, input delivery, kill, and structured errors. Local session
+//! ritual verbs use the shared store path/timestamp helpers because they are
+//! ledger-only mutations.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -13,7 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     api::{EventsResponse, HealthResponse, COVEN_API_NAMED_VERSION},
-    daemon, harness, store,
+    current_timestamp, daemon, harness, store, STORE_FILE_NAME,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,7 +92,7 @@ impl DaemonChatClient {
 
 impl DaemonChatClient {
     fn store_path(&self) -> PathBuf {
-        self.coven_home.join("coven.sqlite3")
+        self.coven_home.join(STORE_FILE_NAME)
     }
 
     fn open_store(&self) -> Result<rusqlite::Connection> {
@@ -213,7 +215,7 @@ impl ChatClient for DaemonChatClient {
         if session.status == "running" {
             anyhow::bail!("session `{session_id}` is still running; stop it before archiving");
         }
-        store::archive_session(&conn, session_id, &timestamp_now())
+        store::archive_session(&conn, session_id, &current_timestamp())
     }
 
     fn summon_session(&mut self, session_id: &str) -> Result<store::SessionRecord> {
@@ -222,7 +224,7 @@ impl ChatClient for DaemonChatClient {
             anyhow::bail!("session `{session_id}` not found");
         };
         if session.archived_at.is_some() {
-            store::summon_session(&conn, session_id, &timestamp_now())?;
+            store::summon_session(&conn, session_id, &current_timestamp())?;
             let Some(session) = store::get_session(&conn, session_id)? else {
                 anyhow::bail!("session `{session_id}` not found");
             };
@@ -325,10 +327,6 @@ fn daemon_error(status: u16, body: &str) -> anyhow::Error {
         }
     }
     anyhow!("Coven daemon rejected request with HTTP {status}")
-}
-
-fn timestamp_now() -> String {
-    chrono::Utc::now().to_rfc3339()
 }
 
 fn coven_home_dir() -> PathBuf {

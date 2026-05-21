@@ -63,6 +63,7 @@ pub(super) struct App {
     pub(super) scroll_offset: usize,
     pub(super) agents: Vec<AgentInfo>,
     pub(super) active_agent: Option<usize>,
+    project_label: String,
     pub(super) input_mode: InputMode,
     pub(super) agent_select_index: usize,
     pub(super) show_help: bool,
@@ -104,6 +105,7 @@ impl App {
             scroll_offset: 0,
             agents,
             active_agent,
+            project_label: current_project_label(),
             input_mode: InputMode::Normal,
             agent_select_index: 0,
             show_help: false,
@@ -191,6 +193,10 @@ impl App {
             .unwrap_or("—")
     }
 
+    pub(super) fn project_label(&self) -> &str {
+        &self.project_label
+    }
+
     pub(super) fn active_session_id(&self) -> Option<&str> {
         self.active_session_id.as_deref()
     }
@@ -210,12 +216,6 @@ impl App {
             let result = self.resolve_pending_cast_confirmation(&raw);
             self.scroll_to_bottom();
             return Some(result);
-        }
-
-        if is_confirmation_response(&raw) {
-            self.push_system_message("No Cast confirmation is pending.");
-            self.scroll_to_bottom();
-            return Some(SlashCommandResult::Handled);
         }
 
         let raw = self.cast_slash_with_context(&raw);
@@ -913,6 +913,12 @@ fn timestamp_now() -> String {
     chrono::Local::now().format("%H:%M").to_string()
 }
 
+fn current_project_label() -> String {
+    std::env::current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|_| "unknown project".to_string())
+}
+
 fn split_first_arg(input: &str) -> Option<(&str, &str)> {
     let trimmed = input.trim();
     let split_idx = trimmed.find(char::is_whitespace)?;
@@ -945,13 +951,6 @@ fn is_chat_local_slash(input: &str) -> bool {
             | "/trace"
             | "/mem"
             | "/debug"
-    )
-}
-
-fn is_confirmation_response(input: &str) -> bool {
-    matches!(
-        input.trim().to_ascii_lowercase().as_str(),
-        "accept" | "approve" | "yes" | "y" | "reject" | "cancel" | "no" | "n"
     )
 }
 
@@ -1691,7 +1690,11 @@ mod tests {
         app.handle_input();
 
         assert!(app.pending_cast_confirmation.is_none());
-        assert!(mirror.launched.borrow().is_empty());
+        assert!(!mirror
+            .launched
+            .borrow()
+            .iter()
+            .any(|request| request.prompt == "publish the package"));
         assert!(app
             .messages
             .iter()
@@ -1757,6 +1760,32 @@ mod tests {
             .calls
             .borrow()
             .contains(&"input:session-1:next step\n".to_string()));
+    }
+
+    #[test]
+    fn confirmation_words_forward_to_active_session_without_pending_cast_confirmation() {
+        let client = RecordingChatClient::with_session(test_session(
+            "session-1",
+            "codex",
+            "Existing",
+            "running",
+        ));
+        let (mut app, mirror) = app_with_client(client);
+        app.attach_session("session-1");
+        app.input = "yes".to_string();
+        app.cursor_pos = app.input.len();
+
+        let result = app.handle_input();
+
+        assert!(matches!(result, Some(SlashCommandResult::Handled)));
+        assert!(mirror
+            .calls
+            .borrow()
+            .contains(&"input:session-1:yes\n".to_string()));
+        assert!(!app
+            .messages
+            .iter()
+            .any(|message| message.content.contains("No Cast confirmation is pending")));
     }
 
     #[test]

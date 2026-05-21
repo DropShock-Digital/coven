@@ -25,7 +25,7 @@ mod tui;
 mod verification;
 
 const DEFAULT_COVEN_HOME_DIR: &str = ".coven";
-const STORE_FILE_NAME: &str = "coven.sqlite3";
+pub(crate) const STORE_FILE_NAME: &str = "coven.sqlite3";
 const DEFAULT_SESSION_STATUS: &str = "created";
 const RUNNING_SESSION_STATUS: &str = "running";
 const FAILED_SESSION_STATUS: &str = "failed";
@@ -876,7 +876,7 @@ fn joined_prompt(prompt_args: &[String]) -> Result<String> {
     Ok(prompt.to_string())
 }
 
-fn current_timestamp() -> String {
+pub(crate) fn current_timestamp() -> String {
     Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 

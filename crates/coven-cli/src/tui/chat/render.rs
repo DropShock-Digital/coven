@@ -66,9 +66,7 @@ pub(super) fn render_ui(f: &mut Frame, app: &mut App) {
 
 fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
     let harness = app.active_agent_harness();
-    let project = std::env::current_dir()
-        .map(|path| path.display().to_string())
-        .unwrap_or_else(|_| "unknown project".to_string());
+    let project = app.project_label();
     let daemon_status = if app.active_session_id().is_some() {
         "running"
     } else {
@@ -82,7 +80,7 @@ fn render_status_bar(f: &mut Frame, app: &App, area: Rect) {
         ),
         Span::styled("\u{00b7} ", theme::ratatui_style(DIM)),
         Span::styled(
-            truncate_for_width(&project, area.width.saturating_sub(28) as usize),
+            truncate_for_width(project, area.width.saturating_sub(28) as usize),
             theme::ratatui_style(DIM),
         ),
         Span::styled(" \u{00b7} ", theme::ratatui_style(DIM)),
