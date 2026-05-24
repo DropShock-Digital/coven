@@ -130,6 +130,7 @@ pub fn changed_files(repo_root: &Path) -> Result<Vec<String>> {
 
 fn run_git(repo_root: &Path, args: &[&str]) -> Result<String> {
     let output = std::process::Command::new("git")
+        .args(["-c", "core.fsmonitor="])
         .args(args)
         .current_dir(repo_root)
         .output()
