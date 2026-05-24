@@ -31,12 +31,17 @@ visible row. The chat passes the harness conversation id as
 `conversationId` in every launch payload. Behavior differs between
 harnesses because they have different process models:
 
-- **Codex (per-turn)**: every chat turn cold-starts a new daemon session
-  carrying the same `conversation_id`. The `/sessions` overlay collapses
-  the N rows into one entry with an `Nt` turn-count badge that
-  increments with each turn. Codex's *first* turn lands ungrouped
-  because chat doesn't learn codex's id until it appears in output;
-  subsequent codex turns and the rest group cleanly.
+- **Codex (per-turn)**: every chat turn cold-starts a new daemon session.
+  Turn 1 lands as its own singleton row in `/sessions` because chat
+  doesn't learn codex's session id until it appears in the run banner
+  *after* launch — so the launch payload has no `conversationId` to
+  group by. Turn 2 onward carries the captured id and groups together
+  into one entry with an `Nt` turn-count badge that increments per
+  turn. Net display: 1 singleton row for the cold start + 1 collapsed
+  entry covering turns 2..N. Fixing the singleton would mean
+  decoupling the chat's ledger id from the harness's resume id (chat
+  generates its own UUID up front for grouping, separate from
+  whatever codex assigns for `exec resume`).
 - **Claude (stream-mode)**: only the *first* turn creates a daemon
   session row; subsequent turns are piped into the same long-lived
   process via stdin, with no fresh ledger row per turn. So the overlay
