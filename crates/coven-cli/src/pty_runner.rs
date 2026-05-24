@@ -122,9 +122,12 @@ pub fn spawn_piped_with_observer(
     std_command.stdout(Stdio::piped());
     std_command.stderr(Stdio::piped());
 
-    let mut child = std_command
-        .spawn()
-        .with_context(|| format!("failed to spawn harness `{}` in piped mode", command.program))?;
+    let mut child = std_command.spawn().with_context(|| {
+        format!(
+            "failed to spawn harness `{}` in piped mode",
+            command.program
+        )
+    })?;
 
     let stdin = child
         .stdin
@@ -141,9 +144,11 @@ pub fn spawn_piped_with_observer(
 
     // Drain stderr to keep the buffer from filling and the child from
     // blocking. Stream-json harnesses surface auth/setup errors there.
+    // `map_while(Result::ok)` stops at the first read error instead of
+    // looping forever on EBADF (clippy::lines_filter_map_ok).
     thread::spawn(move || {
         let reader = BufReader::new(stderr);
-        for line in reader.lines().flatten() {
+        for line in reader.lines().map_while(Result::ok) {
             eprintln!("[stream-stderr] {line}");
         }
     });
@@ -190,7 +195,11 @@ fn wait_for_piped_child(
     match child.wait() {
         Ok(status) => {
             let exit_code = status.code();
-            let status_label = if status.success() { "completed" } else { "failed" };
+            let status_label = if status.success() {
+                "completed"
+            } else {
+                "failed"
+            };
             PtyRunResult {
                 status: status_label,
                 exit_code,

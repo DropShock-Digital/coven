@@ -132,9 +132,7 @@ impl SessionRuntime for LiveSessionRuntime {
 
         if launch.launch_mode == crate::harness::HarnessLaunchMode::Stream {
             let piped = pty_runner::spawn_piped_with_observer(&command, observer)?;
-            let killer: Box<dyn RuntimeKiller> = Box::new(PipedKiller {
-                child: piped.child,
-            });
+            let killer: Box<dyn RuntimeKiller> = Box::new(PipedKiller { child: piped.child });
             let mut input = piped.input;
             // Send the launch's prompt as the first stream-json user
             // message so the chat doesn't need a separate send call right
@@ -145,12 +143,7 @@ impl SessionRuntime for LiveSessionRuntime {
                     eprintln!("[stream-launch] initial message write failed: {error}");
                 }
             }
-            return self.register_kind(
-                launch.id.clone(),
-                LiveSessionKind::Stream,
-                input,
-                killer,
-            );
+            return self.register_kind(launch.id.clone(), LiveSessionKind::Stream, input, killer);
         }
 
         let detached = pty_runner::spawn_detached_with_observer(&command, observer)?;
@@ -218,8 +211,8 @@ fn write_stream_message(input: &mut dyn Write, text: &str) -> Result<()> {
             ]
         }
     });
-    let mut line = serde_json::to_string(&envelope)
-        .context("failed to encode stream-json user envelope")?;
+    let mut line =
+        serde_json::to_string(&envelope).context("failed to encode stream-json user envelope")?;
     line.push('\n');
     input
         .write_all(line.as_bytes())

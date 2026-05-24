@@ -897,10 +897,7 @@ fn render_session_overlay(f: &mut Frame, app: &App, area: Rect) {
                     format!("{:<8}", rep.status),
                     theme::status_style(Status::Ready),
                 ),
-                Span::styled(
-                    format!(" {:<7} ", rep.harness),
-                    theme::ratatui_style(DIM),
-                ),
+                Span::styled(format!(" {:<7} ", rep.harness), theme::ratatui_style(DIM)),
                 Span::styled(turn_badge, theme::ratatui_style(DIM)),
                 Span::styled(
                     truncate_for_width(&rep.id, 12),
@@ -908,10 +905,7 @@ fn render_session_overlay(f: &mut Frame, app: &App, area: Rect) {
                 ),
                 Span::styled("  ", theme::ratatui_style(DIM)),
                 Span::styled(
-                    truncate_for_width(
-                        &rep.title,
-                        popup_area.width.saturating_sub(40) as usize,
-                    ),
+                    truncate_for_width(&rep.title, popup_area.width.saturating_sub(40) as usize),
                     theme::ratatui_style(TEXT),
                 ),
             ]));
@@ -1441,7 +1435,11 @@ mod tests {
         assert!(only.ends_with('\u{2026}'), "ellipsis applied: {only:?}");
     }
 
-    fn make_session(id: &str, conversation: Option<&str>, title: &str) -> crate::store::SessionRecord {
+    fn make_session(
+        id: &str,
+        conversation: Option<&str>,
+        title: &str,
+    ) -> crate::store::SessionRecord {
         crate::store::SessionRecord {
             id: id.to_string(),
             project_root: "/tmp/project".to_string(),
@@ -1510,13 +1508,19 @@ mod tests {
                 assert_eq!(rep.id, "turn-2");
                 assert_eq!(*turn_count, 2);
             }
-            other => panic!("expected first entry to be Group, got {:?}", overlay_kind(other)),
+            other => panic!(
+                "expected first entry to be Group, got {:?}",
+                overlay_kind(other)
+            ),
         }
         match &entries[1] {
             SessionOverlayEntry::Singleton { session } => {
                 assert_eq!(session.id, "solo");
             }
-            other => panic!("expected second entry to be Singleton, got {:?}", overlay_kind(other)),
+            other => panic!(
+                "expected second entry to be Singleton, got {:?}",
+                overlay_kind(other)
+            ),
         }
     }
 

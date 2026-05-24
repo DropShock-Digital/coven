@@ -168,7 +168,12 @@ pub fn command_parts_for_harness_with_conversation(
 
     if let Some(hint) = hint {
         if let Some(args) = continuity_args(&spec, mode, hint) {
-            return Ok((spec.executable, args.into_iter().chain(std::iter::once(prompt.to_string())).collect()));
+            return Ok((
+                spec.executable,
+                args.into_iter()
+                    .chain(std::iter::once(prompt.to_string()))
+                    .collect(),
+            ));
         }
     }
 

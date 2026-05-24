@@ -52,10 +52,7 @@ fn temporary_conversations_file(coven_home: &Path, project_root: &Path) -> PathB
 /// set on any error (missing file, corrupt JSON, permissions). Conversation
 /// state is best-effort — a failure to read must not block the chat from
 /// coming up.
-pub(super) fn load_for_project(
-    coven_home: &Path,
-    project_root: &Path,
-) -> HashMap<String, String> {
+pub(super) fn load_for_project(coven_home: &Path, project_root: &Path) -> HashMap<String, String> {
     let path = conversations_file(coven_home, project_root);
     let Ok(data) = std::fs::read(&path) else {
         return HashMap::new();
@@ -195,7 +192,11 @@ mod tests {
         let project = tempfile::tempdir().unwrap();
         let dir = conversations_dir(temp.path());
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(conversations_file(temp.path(), project.path()), b"{ not json").unwrap();
+        std::fs::write(
+            conversations_file(temp.path(), project.path()),
+            b"{ not json",
+        )
+        .unwrap();
 
         let loaded = load_for_project(temp.path(), project.path());
         assert!(loaded.is_empty());
@@ -272,7 +273,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let project = tempfile::tempdir().unwrap();
         let temp_path = temporary_conversations_file(temp.path(), project.path());
-        assert_eq!(temp_path.parent(), Some(conversations_dir(temp.path()).as_path()));
+        assert_eq!(
+            temp_path.parent(),
+            Some(conversations_dir(temp.path()).as_path())
+        );
         assert_ne!(temp_path, conversations_file(temp.path(), project.path()));
     }
 }

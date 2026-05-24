@@ -195,10 +195,9 @@ impl ChatClient for DaemonChatClient {
                 harness::ConversationHint::Init { id } => ("init", id),
                 harness::ConversationHint::Resume { id } => ("resume", id),
             };
-            body.as_object_mut().expect("json! literal is an object").insert(
-                "conversation".to_string(),
-                json!({"mode": mode, "id": id}),
-            );
+            body.as_object_mut()
+                .expect("json! literal is an object")
+                .insert("conversation".to_string(), json!({"mode": mode, "id": id}));
         }
         if let Some(conversation_id) = request.conversation_id.as_ref() {
             body.as_object_mut()

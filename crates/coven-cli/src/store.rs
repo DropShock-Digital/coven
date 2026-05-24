@@ -172,11 +172,8 @@ fn ensure_conversation_id_column(conn: &Connection) -> Result<()> {
         .any(|column| column == "conversation_id");
 
     if !has_conversation_id {
-        conn.execute(
-            "ALTER TABLE sessions ADD COLUMN conversation_id TEXT",
-            [],
-        )
-        .context("failed to add sessions.conversation_id column")?;
+        conn.execute("ALTER TABLE sessions ADD COLUMN conversation_id TEXT", [])
+            .context("failed to add sessions.conversation_id column")?;
     }
     // Idempotent — covers both the fresh-create path (column came from
     // the initial CREATE TABLE) and the migration path (column added just

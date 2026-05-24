@@ -953,7 +953,10 @@ impl App {
     /// `Init` with a freshly generated UUID. For harnesses that auto-assign
     /// (codex) the first turn sends no hint and the id is captured from
     /// output afterwards via `maybe_capture_codex_session_id`.
-    fn conversation_hint_for_harness(&mut self, harness: &str) -> Option<harness::ConversationHint> {
+    fn conversation_hint_for_harness(
+        &mut self,
+        harness: &str,
+    ) -> Option<harness::ConversationHint> {
         if !harness_supports_chat_resume(harness) {
             return None;
         }
@@ -1164,7 +1167,8 @@ impl App {
             return;
         }
         if let Some(id) = extract_codex_session_id(data) {
-            self.harness_conversation_ids.insert("codex".to_string(), id);
+            self.harness_conversation_ids
+                .insert("codex".to_string(), id);
             self.persist_conversations();
         }
     }
@@ -1259,7 +1263,8 @@ impl App {
                     let mut buffer = String::new();
                     for block in content {
                         if block.get("type").and_then(serde_json::Value::as_str) == Some("text") {
-                            if let Some(text) = block.get("text").and_then(serde_json::Value::as_str)
+                            if let Some(text) =
+                                block.get("text").and_then(serde_json::Value::as_str)
                             {
                                 buffer.push_str(text);
                             }
@@ -1756,8 +1761,7 @@ fn detect_stale_session(harness: &str, data: &str) -> bool {
     match harness {
         "claude" => data.contains("No conversation found with session ID"),
         "codex" => {
-            data.contains("no rollout found for thread id")
-                || data.contains("thread/resume failed")
+            data.contains("no rollout found for thread id") || data.contains("thread/resume failed")
         }
         _ => false,
     }
@@ -2233,7 +2237,10 @@ mod tests {
         app.input = "first".to_string();
         app.cursor_pos = app.input.len();
         app.handle_input();
-        let first_session_id = app.active_session_id().expect("first launch sets id").to_string();
+        let first_session_id = app
+            .active_session_id()
+            .expect("first launch sets id")
+            .to_string();
         let init_id = match &mirror.launched.borrow()[0].conversation {
             Some(crate::harness::ConversationHint::Init { id }) => id.clone(),
             other => panic!("first turn should be Init, got {other:?}"),
@@ -2271,7 +2278,10 @@ mod tests {
         app.input = "first".to_string();
         app.cursor_pos = app.input.len();
         app.handle_input();
-        let session_id = app.active_session_id().expect("first launch sets id").to_string();
+        let session_id = app
+            .active_session_id()
+            .expect("first launch sets id")
+            .to_string();
         app.push_event_message(&EventRecord {
             seq: 1,
             id: "event-1".to_string(),
@@ -2295,7 +2305,10 @@ mod tests {
         };
         match &launched[1].conversation {
             Some(crate::harness::ConversationHint::Init { id }) => {
-                assert_ne!(id, &init_id_1, "/clear should yield a fresh conversation id");
+                assert_ne!(
+                    id, &init_id_1,
+                    "/clear should yield a fresh conversation id"
+                );
             }
             other => panic!("expected Init after /clear, got {other:?}"),
         }
@@ -2389,7 +2402,10 @@ mod tests {
         app.input = "first".to_string();
         app.cursor_pos = app.input.len();
         app.handle_input();
-        let session_id = app.active_session_id().expect("first launch sets id").to_string();
+        let session_id = app
+            .active_session_id()
+            .expect("first launch sets id")
+            .to_string();
 
         // Simulate codex emitting its session-id banner mid-stream.
         let captured_id = "019e5998-7130-7872-8d96-a6b67c5b6406";
@@ -2430,7 +2446,10 @@ mod tests {
         app.input = "first".to_string();
         app.cursor_pos = app.input.len();
         app.handle_input();
-        let session_id = app.active_session_id().expect("first launch sets id").to_string();
+        let session_id = app
+            .active_session_id()
+            .expect("first launch sets id")
+            .to_string();
 
         let first_id = "019e5998-7130-7872-8d96-a6b67c5b6406";
         let later_id = "ffffffff-ffff-ffff-ffff-ffffffffffff";
@@ -2447,7 +2466,9 @@ mod tests {
         ));
 
         assert_eq!(
-            app.harness_conversation_ids.get("codex").map(String::as_str),
+            app.harness_conversation_ids
+                .get("codex")
+                .map(String::as_str),
             Some(first_id),
             "first captured id must stick"
         );
@@ -2492,7 +2513,9 @@ mod tests {
         let (mut app, mirror) =
             app_with_persistence(client, coven_home.path(), project_root.path());
         assert_eq!(
-            app.harness_conversation_ids.get("claude").map(String::as_str),
+            app.harness_conversation_ids
+                .get("claude")
+                .map(String::as_str),
             Some(stored_id),
             "App must load persisted conversation ids on startup"
         );
@@ -2524,7 +2547,10 @@ mod tests {
         app.input = "first".to_string();
         app.cursor_pos = app.input.len();
         app.handle_input();
-        let session_id = app.active_session_id().expect("first launch sets id").to_string();
+        let session_id = app
+            .active_session_id()
+            .expect("first launch sets id")
+            .to_string();
 
         let captured_id = "019eaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
         app.push_event_message(&output_event(
@@ -2577,16 +2603,14 @@ mod tests {
         app.input = "first".to_string();
         app.cursor_pos = app.input.len();
         app.handle_input();
-        let stream_session_id = app
-            .active_session_id()
-            .expect("first launch")
-            .to_string();
+        let stream_session_id = app.active_session_id().expect("first launch").to_string();
         assert_eq!(mirror.launched.borrow().len(), 1);
 
         // Stream-mode sessions don't fire an exit between turns; instead
         // each turn ends with a `result` event that clears is_responding.
         // Simulate that so the next user message isn't gated.
-        let result_chunk = r#"{"type":"result","subtype":"success","is_error":false}"#.to_string() + "\n";
+        let result_chunk =
+            r#"{"type":"result","subtype":"success","is_error":false}"#.to_string() + "\n";
         app.push_event_message(&output_event(1, &stream_session_id, &result_chunk));
         assert!(!app.is_responding);
 
@@ -2642,20 +2666,23 @@ mod tests {
         app.handle_input();
         let session_id = app.active_session_id().expect("first launch").to_string();
 
-        let chunk = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello, Val."}]}}"#.to_string() + "\n";
+        let chunk =
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello, Val."}]}}"#
+                .to_string()
+                + "\n";
         app.push_event_message(&output_event(1, &session_id, &chunk));
 
         assert!(
             app.messages
                 .iter()
-                .any(|m| m.content.contains("Hello, Val.")
-                    && matches!(m.role, MessageRole::Agent)),
+                .any(|m| m.content.contains("Hello, Val.") && matches!(m.role, MessageRole::Agent)),
             "stream-json assistant text must be rendered as an agent message"
         );
         // is_responding stays true until the result event arrives.
         assert!(app.is_responding);
 
-        let result_chunk = r#"{"type":"result","subtype":"success","is_error":false}"#.to_string() + "\n";
+        let result_chunk =
+            r#"{"type":"result","subtype":"success","is_error":false}"#.to_string() + "\n";
         app.push_event_message(&output_event(2, &session_id, &result_chunk));
         assert!(!app.is_responding, "result event must clear is_responding");
     }
@@ -2733,11 +2760,10 @@ mod tests {
                 .any(|m| m.content == "first" && matches!(m.role, MessageRole::User)),
             "the user message from the prior turn must still be visible after /new"
         );
-        assert!(
-            app.messages
-                .iter()
-                .any(|m| m.content.contains("Started a new conversation"))
-        );
+        assert!(app
+            .messages
+            .iter()
+            .any(|m| m.content.contains("Started a new conversation")));
     }
 
     #[test]
@@ -2871,7 +2897,10 @@ mod tests {
         app.input = "hello again".to_string();
         app.cursor_pos = app.input.len();
         app.handle_input();
-        let session_id = app.active_session_id().expect("first launch sets id").to_string();
+        let session_id = app
+            .active_session_id()
+            .expect("first launch sets id")
+            .to_string();
 
         // Simulate claude rejecting our stale --resume.
         app.push_event_message(&output_event(
@@ -2957,11 +2986,7 @@ mod tests {
 
         // None of the failed session's content (raw error, trailing noise,
         // "Session completed.") should appear in the transcript.
-        let transcript: Vec<&str> = app
-            .messages
-            .iter()
-            .map(|m| m.content.as_str())
-            .collect();
+        let transcript: Vec<&str> = app.messages.iter().map(|m| m.content.as_str()).collect();
         for content in &transcript {
             assert!(
                 !content.contains("No conversation found with session ID"),
@@ -2977,7 +3002,9 @@ mod tests {
             );
         }
         // The system message and the retry's "Connected" line should be visible.
-        assert!(transcript.iter().any(|c| c.contains("re-sending your message")));
+        assert!(transcript
+            .iter()
+            .any(|c| c.contains("re-sending your message")));
         assert!(transcript.iter().any(|c| c.contains("Connected")));
         // Suppression entry must be cleared once the exit is consumed.
         assert!(!app.suppressed_session_ids.contains(&failed_session));
@@ -3091,7 +3118,10 @@ mod tests {
         app.input = "hello again".to_string();
         app.cursor_pos = app.input.len();
         app.handle_input();
-        let session_id = app.active_session_id().expect("first launch sets id").to_string();
+        let session_id = app
+            .active_session_id()
+            .expect("first launch sets id")
+            .to_string();
 
         app.push_event_message(&output_event(
             1,
@@ -3106,7 +3136,10 @@ mod tests {
         );
         let stored = persistence::load_for_project(coven_home.path(), project_root.path());
         assert!(!stored.contains_key("codex"));
-        assert_eq!(stored.get("claude").map(String::as_str), Some("claude-uuid"));
+        assert_eq!(
+            stored.get("claude").map(String::as_str),
+            Some("claude-uuid")
+        );
     }
 
     #[test]
@@ -3118,11 +3151,9 @@ mod tests {
         persistence::save_for_project(coven_home.path(), project_root.path(), &seed)
             .expect("seed persisted state");
 
-        let attached =
-            test_session("attached-session", "claude", "external", "running");
+        let attached = test_session("attached-session", "claude", "external", "running");
         let client = RecordingChatClient::with_session(attached);
-        let (mut app, _) =
-            app_with_persistence(client, coven_home.path(), project_root.path());
+        let (mut app, _) = app_with_persistence(client, coven_home.path(), project_root.path());
         app.attach_session("attached-session");
         assert!(!app.chat_owns_active_session);
 
@@ -3146,13 +3177,15 @@ mod tests {
         let coven_home = tempfile::tempdir().unwrap();
         let project_root = tempfile::tempdir().unwrap();
         let client = RecordingChatClient::default();
-        let (mut app, _) =
-            app_with_persistence(client, coven_home.path(), project_root.path());
+        let (mut app, _) = app_with_persistence(client, coven_home.path(), project_root.path());
         app.active_agent = Some(0); // codex
         app.input = "hi".to_string();
         app.cursor_pos = app.input.len();
         app.handle_input();
-        let session_id = app.active_session_id().expect("first launch sets id").to_string();
+        let session_id = app
+            .active_session_id()
+            .expect("first launch sets id")
+            .to_string();
         assert!(!app.harness_conversation_ids.contains_key("codex"));
 
         // Stale phrase arrives during a turn that had no stored codex id —
