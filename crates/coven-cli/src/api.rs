@@ -186,6 +186,14 @@ pub fn handle_request_with_runtime(
         }
         ("POST", "/cast") => submit_cast(coven_home, body),
         ("GET", "/cast-codes") => cast_codes_response(),
+        // Empty-array stubs: the cockpit polls these surfaces but the daemon
+        // does not track them yet. Returning [] lets pages render their empty
+        // state instead of 404 errors. Replace with real implementations as
+        // the daemon learns about each concept.
+        ("GET", "/familiars") => json_response(200, &json!([])),
+        ("GET", "/skills") => json_response(200, &json!([])),
+        ("GET", "/memory") => json_response(200, &json!([])),
+        ("GET", "/research") => json_response(200, &json!([])),
         ("GET", "/sessions") => {
             let conn = store::open_store(&store_path(coven_home))?;
             let sessions = store::list_sessions(&conn)?;
@@ -2467,6 +2475,24 @@ mod tests {
         assert_eq!(body["open_sessions"], 2);
         assert_eq!(body["active_familiars"], 0);
         assert_eq!(body["skills_count"], 0);
+        Ok(())
+    }
+
+    #[test]
+    fn empty_array_stubs_return_200_with_empty_json_array() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let home = temp.path();
+        for route in [
+            "/api/v1/familiars",
+            "/api/v1/skills",
+            "/api/v1/memory",
+            "/api/v1/research",
+        ] {
+            let response = handle_request("GET", route, home, None)?;
+            assert_eq!(response.status, 200, "route {route}");
+            assert_eq!(response.content_type, "application/json", "route {route}");
+            assert_eq!(response.body, "[]", "route {route}");
+        }
         Ok(())
     }
 
