@@ -51,7 +51,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.0
         with:
           fetch-depth: 0
-      - name: Confirm tag is annotated and signature-verified by GitHub
+      - name: Confirm tag is annotated, signer-authorized, and points to main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -66,10 +66,31 @@ jobs:
           payload=$(gh api "/repos/$GITHUB_REPOSITORY/git/tags/$TAG_OBJECT_SHA")
           verified=$(jq -r '.verification.verified' <<<"$payload")
           reason=$(jq -r '.verification.reason' <<<"$payload")
-          tagger=$(jq -r '.tagger.email // "unknown"' <<<"$payload")
-          echo "tag=$TAG_NAME verified=$verified reason=$reason tagger=$tagger"
+          tagger=$(jq -r '.tagger.email // ""' <<<"$payload")
+          TAGGED_COMMIT_SHA=$(jq -r '.object.sha // empty' <<<"$payload")
+          echo "tag=$TAG_NAME verified=$verified reason=$reason tagger=${tagger:-unknown} target=$TAGGED_COMMIT_SHA"
           if [ "$verified" != "true" ]; then
             echo "::error::Tag $TAG_NAME does not have a GitHub-verified signature (reason=$reason). Re-tag with a signing key registered to your GitHub account."
+            exit 1
+          fi
+          if [ -z "$tagger" ]; then
+            echo "::error::Tag $TAG_NAME is missing a tagger email in tag metadata."
+            exit 1
+          fi
+          allowed_signers_raw='${{ vars.NPM_RELEASE_SIGNERS }}'
+          if [ -z "$allowed_signers_raw" ]; then
+            echo "::error::Repository variable NPM_RELEASE_SIGNERS must contain a comma-separated allowlist of release tagger emails."
+            exit 1
+          fi
+          allowed_signers=",$(echo "$allowed_signers_raw" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]'),"
+          tagger_lc=$(echo "$tagger" | tr '[:upper:]' '[:lower:]')
+          if [[ "$allowed_signers" != *",$tagger_lc,"* ]]; then
+            echo "::error::Tag signer $tagger is not in NPM_RELEASE_SIGNERS."
+            exit 1
+          fi
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$TAGGED_COMMIT_SHA" origin/main; then
+            echo "::error::Refusing release: tagged commit $TAGGED_COMMIT_SHA is not contained in origin/main."
             exit 1
           fi
 

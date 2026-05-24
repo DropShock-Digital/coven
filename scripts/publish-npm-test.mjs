@@ -202,6 +202,16 @@ test('release workflow verifies the signed release tag before building or publis
     /lightweight tag/,
     'verify-tag must explicitly reject lightweight (unsigned) tags'
   );
+  assert.match(
+    workflow,
+    /git merge-base --is-ancestor .* origin\/main/,
+    'verify-tag must ensure the tagged commit is contained in origin/main'
+  );
+  assert.match(
+    workflow,
+    /vars\.NPM_RELEASE_SIGNERS/,
+    'verify-tag must require an explicit signer allowlist via NPM_RELEASE_SIGNERS'
+  );
 });
 
 test('release workflow triggers only on signed v* tag pushes (no workflow_dispatch fallback)', () => {
