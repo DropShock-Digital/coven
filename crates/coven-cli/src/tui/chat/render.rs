@@ -866,31 +866,51 @@ fn render_session_overlay(f: &mut Frame, app: &App, area: Rect) {
             theme::ratatui_style(DIM),
         )));
     } else {
-        for session in app.sessions.iter().take(10) {
-            let marker = if app.active_session_id() == Some(session.id.as_str()) {
-                ">"
+        let entries = collapse_sessions_by_conversation(&app.sessions);
+        let active_conv = app.active_session_id().and_then(|active| {
+            app.sessions
+                .iter()
+                .find(|session| session.id == active)
+                .and_then(|session| session.conversation_id.as_deref())
+        });
+        for entry in entries.iter().take(10) {
+            let (rep, turn_count) = match entry {
+                SessionOverlayEntry::Group { rep, turn_count } => (*rep, *turn_count),
+                SessionOverlayEntry::Singleton { session } => (*session, 1),
+            };
+            // A row is "active" if the chat's active_session_id belongs to
+            // it: either via shared conversation_id (group) or matching the
+            // singleton's own id.
+            let is_active = match rep.conversation_id.as_deref() {
+                Some(conv) => active_conv == Some(conv),
+                None => app.active_session_id() == Some(rep.id.as_str()),
+            };
+            let marker = if is_active { ">" } else { " " };
+            let turn_badge = if turn_count > 1 {
+                format!("{turn_count:>2}t ")
             } else {
-                " "
+                "    ".to_string()
             };
             lines.push(Line::from(vec![
                 Span::styled(format!(" {marker} "), theme::ratatui_style(PRIMARY)),
                 Span::styled(
-                    format!("{:<8}", session.status),
+                    format!("{:<8}", rep.status),
                     theme::status_style(Status::Ready),
                 ),
                 Span::styled(
-                    format!(" {:<7} ", session.harness),
+                    format!(" {:<7} ", rep.harness),
                     theme::ratatui_style(DIM),
                 ),
+                Span::styled(turn_badge, theme::ratatui_style(DIM)),
                 Span::styled(
-                    truncate_for_width(&session.id, 12),
+                    truncate_for_width(&rep.id, 12),
                     theme::ratatui_style(PRIMARY),
                 ),
                 Span::styled("  ", theme::ratatui_style(DIM)),
                 Span::styled(
                     truncate_for_width(
-                        &session.title,
-                        popup_area.width.saturating_sub(36) as usize,
+                        &rep.title,
+                        popup_area.width.saturating_sub(40) as usize,
                     ),
                     theme::ratatui_style(TEXT),
                 ),
@@ -912,6 +932,53 @@ fn render_session_overlay(f: &mut Frame, app: &App, area: Rect) {
         .block(block)
         .wrap(Wrap { trim: false });
     f.render_widget(overlay, popup_area);
+}
+
+/// One row in the `/sessions` overlay. Either a singleton session (legacy
+/// one-off `coven run`-style launches) or a group of N chat turns that all
+/// share the same conversation_id — collapsed into a single representative
+/// row so the overlay isn't flooded after a long chat.
+enum SessionOverlayEntry<'a> {
+    Group {
+        rep: &'a crate::store::SessionRecord,
+        turn_count: usize,
+    },
+    Singleton {
+        session: &'a crate::store::SessionRecord,
+    },
+}
+
+/// Collapse sessions that share a `conversation_id` into a single entry per
+/// conversation, keyed on the FIRST session encountered (callers pass
+/// daemon-listed sessions in `created_at DESC` order, so the first per
+/// conversation is the most recent turn). Sessions without a
+/// `conversation_id` pass through as singletons.
+fn collapse_sessions_by_conversation(
+    sessions: &[crate::store::SessionRecord],
+) -> Vec<SessionOverlayEntry<'_>> {
+    use std::collections::{HashMap, HashSet};
+    let mut counts: HashMap<&str, usize> = HashMap::new();
+    for session in sessions {
+        if let Some(conv) = session.conversation_id.as_deref() {
+            *counts.entry(conv).or_insert(0) += 1;
+        }
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut entries: Vec<SessionOverlayEntry<'_>> = Vec::new();
+    for session in sessions {
+        match session.conversation_id.as_deref() {
+            Some(conv) => {
+                if seen.insert(conv) {
+                    entries.push(SessionOverlayEntry::Group {
+                        rep: session,
+                        turn_count: counts.get(conv).copied().unwrap_or(1),
+                    });
+                }
+            }
+            None => entries.push(SessionOverlayEntry::Singleton { session }),
+        }
+    }
+    entries
 }
 
 /// Floating slash-command autocomplete. Anchored just above the input area so
@@ -1372,6 +1439,92 @@ mod tests {
             "left edge preserved: {only:?}"
         );
         assert!(only.ends_with('\u{2026}'), "ellipsis applied: {only:?}");
+    }
+
+    fn make_session(id: &str, conversation: Option<&str>, title: &str) -> crate::store::SessionRecord {
+        crate::store::SessionRecord {
+            id: id.to_string(),
+            project_root: "/tmp/project".to_string(),
+            harness: "claude".to_string(),
+            title: title.to_string(),
+            status: "completed".to_string(),
+            exit_code: Some(0),
+            archived_at: None,
+            created_at: "2026-05-24T00:00:00Z".to_string(),
+            updated_at: "2026-05-24T00:00:00Z".to_string(),
+            conversation_id: conversation.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn collapse_sessions_returns_empty_for_empty_input() {
+        let entries = collapse_sessions_by_conversation(&[]);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn collapse_sessions_groups_consecutive_same_conversation_into_one_entry() {
+        let sessions = vec![
+            make_session("turn-3", Some("conv-a"), "third"),
+            make_session("turn-2", Some("conv-a"), "second"),
+            make_session("turn-1", Some("conv-a"), "first"),
+        ];
+        let entries = collapse_sessions_by_conversation(&sessions);
+        assert_eq!(entries.len(), 1);
+        match &entries[0] {
+            SessionOverlayEntry::Group { rep, turn_count } => {
+                assert_eq!(rep.id, "turn-3", "rep must be the first (most recent) turn");
+                assert_eq!(*turn_count, 3);
+            }
+            SessionOverlayEntry::Singleton { .. } => panic!("expected a Group"),
+        }
+    }
+
+    #[test]
+    fn collapse_sessions_passes_through_sessions_with_no_conversation_id_as_singletons() {
+        let sessions = vec![
+            make_session("solo-2", None, "free-running task 2"),
+            make_session("solo-1", None, "free-running task 1"),
+        ];
+        let entries = collapse_sessions_by_conversation(&sessions);
+        assert_eq!(entries.len(), 2);
+        for entry in &entries {
+            assert!(matches!(entry, SessionOverlayEntry::Singleton { .. }));
+        }
+    }
+
+    #[test]
+    fn collapse_sessions_handles_interleaved_groups_and_singletons() {
+        // Imagine: a fresh codex run between two chat turns of the same
+        // conversation. Daemon returns DESC by created_at so chat turn 2
+        // is first, codex run second, chat turn 1 third.
+        let sessions = vec![
+            make_session("turn-2", Some("conv-a"), "chat reply 2"),
+            make_session("solo", None, "ad-hoc codex run"),
+            make_session("turn-1", Some("conv-a"), "chat reply 1"),
+        ];
+        let entries = collapse_sessions_by_conversation(&sessions);
+        assert_eq!(entries.len(), 2);
+        match &entries[0] {
+            SessionOverlayEntry::Group { rep, turn_count } => {
+                assert_eq!(rep.id, "turn-2");
+                assert_eq!(*turn_count, 2);
+            }
+            other => panic!("expected first entry to be Group, got {:?}", overlay_kind(other)),
+        }
+        match &entries[1] {
+            SessionOverlayEntry::Singleton { session } => {
+                assert_eq!(session.id, "solo");
+            }
+            other => panic!("expected second entry to be Singleton, got {:?}", overlay_kind(other)),
+        }
+    }
+
+    fn overlay_kind(entry: &SessionOverlayEntry<'_>) -> &'static str {
+        match entry {
+            SessionOverlayEntry::Group { .. } => "Group",
+            SessionOverlayEntry::Singleton { .. } => "Singleton",
+        }
     }
 
     #[test]

@@ -25,6 +25,16 @@ Two slash verbs reset state:
   visible transcript. Use it when you want to start a fresh thread but
   still scroll up to reference the prior exchange.
 
+Each chat turn still launches a fresh daemon session under the hood, but
+the daemon's session store now carries a `conversation_id` column that
+groups the turns. The chat passes the harness conversation id (claude's
+session uuid, or codex's captured id) as `conversationId` in every launch
+payload, and the `/sessions` overlay collapses sessions that share an id
+into a single row with an `Nt` turn-count badge. Codex's *first* turn
+lands ungrouped because chat doesn't learn codex's id until it appears in
+output; subsequent codex turns and every claude turn group cleanly. The
+column also flows through to `coven sessions` for non-TUI clients.
+
 The two harnesses differ in *who assigns the session id*:
 
 - **Claude** lets us pre-assign one via `--session-id <uuid>`. The chat app
@@ -176,16 +186,6 @@ CLI's own session API avoids both problems.
    the right id.
 
 ## Future work
-
-### One ledger row per conversation
-
-Today each chat turn shows up as a separate session in `/sessions`. That's
-ledger noise. Options:
-
-- Daemon API change: add a `conversation_id` column to the session store and
-  group by it in the `/sessions` overlay.
-- Chat-side aggregation: keep displaying one row per launch, but tag each
-  with its conversation id and let the overlay collapse them.
 
 ### True streaming follow-ups
 
