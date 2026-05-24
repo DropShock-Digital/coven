@@ -1194,6 +1194,17 @@ impl App {
             Ok(events) => {
                 self.reset_event_poll_failures();
                 for event in events {
+                    // If `push_event_message` swapped the active session
+                    // mid-batch (e.g. stale-id recovery auto-relaunched
+                    // into a new session and reset `last_event_seq` to
+                    // None), stop processing this batch. Continuing
+                    // would advance `last_event_seq` to one of the OLD
+                    // session's seqs, causing the next poll for the NEW
+                    // session to query with a cursor that filters out
+                    // the new session's own events.
+                    if self.active_session_id.as_deref() != Some(session_id.as_str()) {
+                        break;
+                    }
                     self.last_event_seq = Some(event.seq);
                     self.push_event_message(&event);
                 }
@@ -1883,6 +1894,21 @@ fn harness_supports_chat_resume(harness: &str) -> bool {
 /// claude and codex unhelpfully exit with code 0 in this case, so we have to
 /// pattern-match on their distinctive error wording. See
 /// `docs/chat-persistence.md` under "stale-id auto-recovery".
+///
+/// The match is intentionally a broad `contains` rather than a strict
+/// per-line / per-envelope check because the same phrase appears in both
+/// the PTY mode (NonInteractive) plain-text output and the Stream mode
+/// stderr envelope (`{"type":"system","subtype":"stderr","text":"…"}`),
+/// and a single regex needs to handle both. The phrases ("No conversation
+/// found with session ID", "no rollout found for thread id",
+/// "thread/resume failed") are distinctive enough that the realistic
+/// false-positive surface is narrow: a model reply that literally quotes
+/// the phrase — e.g. "The error you saw was 'No conversation found…'" —
+/// would auto-drop the conversation id and trigger an auto-retry. If
+/// that becomes a real annoyance, the right fix is splitting detection
+/// into a per-stream-mode JSON path (look at `system/stderr` text only)
+/// and a per-PTY-mode line path, instead of one regex that's also asked
+/// to match assistant prose.
 fn detect_stale_session(harness: &str, data: &str) -> bool {
     match harness {
         "claude" => data.contains("No conversation found with session ID"),
@@ -3362,6 +3388,84 @@ mod tests {
                 .iter()
                 .any(|m| m.content.contains("Hi from the new conversation")),
             "retry-session output must not be suppressed"
+        );
+    }
+
+    #[test]
+    fn poll_session_events_stops_advancing_cursor_when_active_session_changes_mid_batch() {
+        let coven_home = tempfile::tempdir().unwrap();
+        let project_root = tempfile::tempdir().unwrap();
+        let stored_id = "fab1efac-1234-5678-9abc-def012345678";
+        let mut seed = std::collections::HashMap::new();
+        seed.insert("claude".to_string(), stored_id.to_string());
+        persistence::save_for_project(coven_home.path(), project_root.path(), &seed)
+            .expect("seed persisted state");
+
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) =
+            app_with_persistence(client, coven_home.path(), project_root.path());
+        app.active_agent = Some(1); // claude
+        app.input = "hi".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let old_session = app.active_session_id().expect("first launch").to_string();
+
+        // Pre-load three events for the OLD session: a harmless first
+        // one, a stale-error in the middle, and a "trailing noise"
+        // event afterward. Without the active-session-id guard in
+        // poll_session_events, processing the trailing event would
+        // overwrite `last_event_seq` after the stale handler had
+        // reset it to None for the new session, leaving a poisoned
+        // cursor.
+        let stored_id_for_error = stored_id.to_string();
+        let old_session_for_events = old_session.clone();
+        mirror.events.borrow_mut().extend(vec![
+            EventRecord {
+                seq: 10,
+                id: "ev-10".to_string(),
+                session_id: old_session_for_events.clone(),
+                kind: "output".to_string(),
+                payload_json: serde_json::json!({ "data": "" }).to_string(),
+                created_at: "2026-05-19T00:00:00Z".to_string(),
+            },
+            EventRecord {
+                seq: 11,
+                id: "ev-11".to_string(),
+                session_id: old_session_for_events.clone(),
+                kind: "output".to_string(),
+                payload_json: serde_json::json!({
+                    "data": format!("No conversation found with session ID: {stored_id_for_error}\n")
+                })
+                .to_string(),
+                created_at: "2026-05-19T00:00:00Z".to_string(),
+            },
+            EventRecord {
+                seq: 12,
+                id: "ev-12".to_string(),
+                session_id: old_session_for_events,
+                kind: "output".to_string(),
+                payload_json: serde_json::json!({ "data": "trailing noise after stale\n" })
+                    .to_string(),
+                created_at: "2026-05-19T00:00:00Z".to_string(),
+            },
+        ]);
+
+        app.poll_session_events();
+
+        // Active session should have swapped to the retry session.
+        let new_session = app
+            .active_session_id()
+            .expect("auto-retry must have set a new active session");
+        assert_ne!(new_session, old_session);
+
+        // Cursor must be at None (the value the auto-retry reset to),
+        // NOT Some(12) from the trailing OLD-session event. If it were
+        // Some(12), the next poll for the new session would query with
+        // after_seq=12 and skip any new-session events that arrived
+        // with smaller seqs.
+        assert_eq!(
+            app.last_event_seq, None,
+            "active-session swap during a batch must stop the loop from advancing the cursor past the swap"
         );
     }
 
