@@ -411,12 +411,31 @@ fn record_input(
         return session_not_live_response(session_id);
     }
 
-    let payload = parse_body(body)?;
+    // Same structured-error pattern as `launch_session`: malformed JSON
+    // or runtime send failures must NOT propagate to the accept loop
+    // (that crashes the daemon process). Parse errors → 400; runtime
+    // errors → 500 except for "not live" which is the dedicated 409.
+    let payload = match parse_body(body) {
+        Ok(payload) => payload,
+        Err(error) => {
+            return api_error(
+                400,
+                "invalid_request",
+                &error.to_string(),
+                Some(json!({ "sessionId": session_id })),
+            );
+        }
+    };
     if let Err(error) = runtime.send_input(session_id, &payload) {
         if error.to_string().contains("not live") {
             return session_not_live_response(session_id);
         }
-        return Err(error);
+        return api_error(
+            500,
+            "send_input_failed",
+            &error.to_string(),
+            Some(json!({ "sessionId": session_id })),
+        );
     }
     insert_event(&conn, session_id, "input", payload)?;
     json_response(202, &json!({ "ok": true, "accepted": true }))
@@ -440,11 +459,19 @@ fn kill_session(
         return session_not_live_response(session_id);
     }
 
+    // Same structured-error pattern as the launch + input handlers: a
+    // runtime kill failure (libc::kill returning EPERM, etc.) must
+    // become a 500 response, not an Err that brings down the daemon.
     if let Err(error) = runtime.kill_session(session_id) {
         if error.to_string().contains("not live") {
             return session_not_live_response(session_id);
         }
-        return Err(error);
+        return api_error(
+            500,
+            "kill_failed",
+            &error.to_string(),
+            Some(json!({ "sessionId": session_id })),
+        );
     }
     let now = current_timestamp();
     store::update_session_status(&conn, session_id, "killed", None, &now)?;
@@ -1229,6 +1256,105 @@ mod tests {
         assert_eq!(
             runtime.inputs.borrow().as_slice(),
             &["session-1:hello coven"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn input_request_with_malformed_body_returns_400_not_daemon_crash() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        insert_test_session(temp_dir.path(), "session-1")?;
+
+        let response = handle_request_with_body(
+            "POST",
+            "/sessions/session-1/input",
+            temp_dir.path(),
+            None,
+            Some("{ not json"),
+        )?;
+
+        assert_eq!(response.status, 400);
+        assert!(
+            response.body.contains("invalid_request"),
+            "expected structured `invalid_request` code, got: {}",
+            response.body
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn input_request_runtime_failure_returns_500_not_daemon_crash() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        insert_test_session(temp_dir.path(), "session-1")?;
+
+        // Runtime that fails send_input with a non-"not live" message
+        // — we want the daemon to surface it as a structured 500
+        // instead of bubbling it to serve_next_connection's `?`.
+        struct FailingInput;
+        impl SessionRuntime for FailingInput {
+            fn launch_session(&self, _: &SessionLaunch) -> Result<()> {
+                Ok(())
+            }
+            fn send_input(&self, _: &str, _: &Value) -> Result<()> {
+                Err(anyhow::anyhow!("simulated send_input failure"))
+            }
+            fn kill_session(&self, _: &str) -> Result<()> {
+                Ok(())
+            }
+        }
+        let runtime = FailingInput;
+
+        let response = handle_request_with_runtime(
+            "POST",
+            "/sessions/session-1/input",
+            temp_dir.path(),
+            None,
+            Some(r#"{"data":"hello"}"#),
+            &runtime,
+        )?;
+
+        assert_eq!(response.status, 500);
+        assert!(
+            response.body.contains("send_input_failed"),
+            "expected structured `send_input_failed` code, got: {}",
+            response.body
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn kill_request_runtime_failure_returns_500_not_daemon_crash() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        insert_test_session(temp_dir.path(), "session-1")?;
+
+        struct FailingKill;
+        impl SessionRuntime for FailingKill {
+            fn launch_session(&self, _: &SessionLaunch) -> Result<()> {
+                Ok(())
+            }
+            fn send_input(&self, _: &str, _: &Value) -> Result<()> {
+                Ok(())
+            }
+            fn kill_session(&self, _: &str) -> Result<()> {
+                Err(anyhow::anyhow!("simulated kill_session failure"))
+            }
+        }
+        let runtime = FailingKill;
+
+        let response = handle_request_with_runtime(
+            "POST",
+            "/sessions/session-1/kill",
+            temp_dir.path(),
+            None,
+            Some("{}"),
+            &runtime,
+        )?;
+
+        assert_eq!(response.status, 500);
+        assert!(
+            response.body.contains("kill_failed"),
+            "expected structured `kill_failed` code, got: {}",
+            response.body
         );
         Ok(())
     }
