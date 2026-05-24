@@ -38,7 +38,7 @@ impl LaunchRequest {
             project_root: cwd.clone(),
             cwd,
             harness: harness.to_string(),
-            launch_mode: harness::HarnessLaunchMode::NonInteractive,
+            launch_mode: harness::HarnessLaunchMode::Interactive,
             prompt: prompt.to_string(),
             title: session_title(prompt),
         })
@@ -378,11 +378,15 @@ mod tests {
     }
 
     #[test]
-    fn launch_request_uses_current_dir_as_daemon_validated_boundary() -> Result<()> {
+    fn launch_request_uses_current_dir_and_interactive_mode_for_chat() -> Result<()> {
         let request = LaunchRequest::for_current_dir("codex", "summarize")?;
 
         assert_eq!(request.harness, "codex");
         assert_eq!(request.prompt, "summarize");
+        assert_eq!(
+            request.launch_mode,
+            crate::harness::HarnessLaunchMode::Interactive
+        );
         assert!(!request.project_root.is_empty());
         assert_eq!(request.project_root, request.cwd);
         Ok(())

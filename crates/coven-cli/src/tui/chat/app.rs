@@ -1719,7 +1719,7 @@ mod tests {
     }
 
     #[test]
-    fn plain_chat_input_launches_daemon_session_without_mock_response() {
+    fn plain_chat_input_launches_interactive_daemon_session_without_mock_response() {
         let client = RecordingChatClient::default();
         let (mut app, mirror) = app_with_client(client);
         app.input = "summarize the repo".to_string();
@@ -1734,7 +1734,7 @@ mod tests {
         assert_eq!(launched[0].prompt, "summarize the repo");
         assert_eq!(
             launched[0].launch_mode,
-            crate::harness::HarnessLaunchMode::NonInteractive
+            crate::harness::HarnessLaunchMode::Interactive
         );
         assert!(app.active_session_id().is_some());
         assert!(app.messages.iter().any(|message| message
