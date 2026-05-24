@@ -13,9 +13,17 @@ extend the mechanism to additional harnesses.
 Conversations persist across `coven chat` invocations on a per-project basis:
 on startup the chat seeds its in-memory map from
 `$COVEN_HOME/chat-conversations/<project-key>.json`, so the next message
-sends `Resume` immediately. `/clear` deletes that file. Different projects
-get different files (the key is a deterministic FNV-1a hash of the canonical
-project root path); changing project directory yields a fresh thread.
+sends `Resume` immediately. Different projects get different files (the key
+is a deterministic FNV-1a hash of the canonical project root path);
+changing project directory yields a fresh thread.
+
+Two slash verbs reset state:
+
+- **`/clear`** clears the visible transcript *and* drops the conversation
+  ids (memory + disk). Use it when you want a complete reset.
+- **`/new`** drops the conversation ids (memory + disk) but **keeps** the
+  visible transcript. Use it when you want to start a fresh thread but
+  still scroll up to reference the prior exchange.
 
 The two harnesses differ in *who assigns the session id*:
 
@@ -43,11 +51,13 @@ with each launch:
 - **`Resume { id }`** — subsequent turn. The harness CLI is told to resume
   that session and append the new prompt.
 
-The chat app keeps a `HashMap<harness_id, conversation_id>` for the lifetime
-of the `App`. On the first turn for a harness, it generates a UUID, stores it,
-and sends `Init`. On every later turn it sends `Resume` with the same id.
-`/clear` (and Ctrl+L) drop the map so the next turn starts a brand-new
-conversation.
+The chat app keeps a `HashMap<harness_id, conversation_id>` seeded from the
+persistence file on startup. On the first turn for a harness that doesn't
+have a stored id yet, it generates a UUID (claude) or waits to capture one
+from output (codex), stores it, and sends `Init` (claude) or no hint
+(codex). On every later turn it sends `Resume` with the stored id. `/clear`
+(and Ctrl+L) drop the map *and* the visible transcript; `/new` drops just
+the map.
 
 ### Data flow
 
@@ -166,13 +176,6 @@ CLI's own session API avoids both problems.
    the right id.
 
 ## Future work
-
-### `/new` as a separate verb
-
-`/clear` today does double duty: it clears the visible transcript *and*
-the persisted conversation. A `/new` verb that only resets the conversation
-(keeping the transcript visible for context) would split the two so users
-can scroll back through history while starting a fresh thread.
 
 ### One ledger row per conversation
 

@@ -171,7 +171,11 @@ pub(super) const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "/clear",
-        summary: "Clear the chat transcript",
+        summary: "Clear the transcript and start a fresh thread",
+    },
+    SlashCommand {
+        name: "/new",
+        summary: "Start a fresh thread; keep the transcript visible",
     },
     SlashCommand {
         name: "/agent",
@@ -509,6 +513,18 @@ impl App {
         self.push_system_message("Chat cleared.");
     }
 
+    /// Drop the in-memory + persisted harness conversation ids without
+    /// touching the visible transcript. Useful when a user wants to start
+    /// a fresh thread (next message will create a new harness session) but
+    /// keep the prior exchange visible for their own reference.
+    pub(super) fn start_new_conversation(&mut self) {
+        self.harness_conversation_ids.clear();
+        self.clear_persisted_conversations();
+        self.push_system_message(
+            "Started a new conversation. Your next message creates a fresh thread; the transcript above stays for reference.",
+        );
+    }
+
     pub(super) fn handle_slash_command(&mut self, input: &str) -> SlashCommandResult {
         let parts: Vec<&str> = input.splitn(2, char::is_whitespace).collect();
         let cmd = parts[0].to_lowercase();
@@ -521,6 +537,10 @@ impl App {
             }
             "/clear" | "/cls" => {
                 self.clear_transcript();
+                SlashCommandResult::Handled
+            }
+            "/new" => {
+                self.start_new_conversation();
                 SlashCommandResult::Handled
             }
             "/agent" | "/a" => {
@@ -1550,6 +1570,7 @@ fn is_chat_local_slash(input: &str) -> bool {
             | "/palette"
             | "/clear"
             | "/cls"
+            | "/new"
             | "/agent"
             | "/a"
             | "/export"
@@ -2307,6 +2328,105 @@ mod tests {
             Some(captured_id),
             "codex session id must be persisted as soon as it's captured"
         );
+    }
+
+    #[test]
+    fn slash_new_drops_conversation_ids_but_preserves_visible_transcript() {
+        let coven_home = tempfile::tempdir().unwrap();
+        let project_root = tempfile::tempdir().unwrap();
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_persistence(client, coven_home.path(), project_root.path());
+        app.active_agent = Some(1); // claude
+        app.input = "first".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let messages_after_first_turn = app.messages.len();
+        assert!(
+            app.harness_conversation_ids.contains_key("claude"),
+            "first claude turn must seed an id"
+        );
+        assert!(
+            persistence::conversations_file(coven_home.path(), project_root.path()).exists(),
+            "first turn must have persisted the id"
+        );
+
+        app.input = "/new".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+
+        // Conversation ids gone from both memory and disk.
+        assert!(app.harness_conversation_ids.is_empty());
+        assert!(
+            !persistence::conversations_file(coven_home.path(), project_root.path()).exists(),
+            "/new must delete the persistence file too"
+        );
+
+        // Visible transcript preserved (plus the /new system message).
+        assert!(
+            app.messages.len() >= messages_after_first_turn + 1,
+            "/new must keep prior messages and add at least its own system message"
+        );
+        assert!(
+            app.messages
+                .iter()
+                .any(|m| m.content == "first" && matches!(m.role, MessageRole::User)),
+            "the user message from the prior turn must still be visible after /new"
+        );
+        assert!(
+            app.messages
+                .iter()
+                .any(|m| m.content.contains("Started a new conversation"))
+        );
+    }
+
+    #[test]
+    fn first_chat_turn_after_slash_new_sends_init_not_resume() {
+        let coven_home = tempfile::tempdir().unwrap();
+        let project_root = tempfile::tempdir().unwrap();
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) =
+            app_with_persistence(client, coven_home.path(), project_root.path());
+        app.active_agent = Some(1); // claude
+        app.input = "first".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let first_id = match &mirror.launched.borrow()[0].conversation {
+            Some(crate::harness::ConversationHint::Init { id }) => id.clone(),
+            other => panic!("turn 1 should be Init, got {other:?}"),
+        };
+        // Mark the first turn as completed so the next launch isn't gated.
+        let session_id = app.active_session_id().expect("first launch").to_string();
+        app.push_event_message(&EventRecord {
+            seq: 1,
+            id: "event-1".to_string(),
+            session_id,
+            kind: "exit".to_string(),
+            payload_json: serde_json::json!({ "status": "completed" }).to_string(),
+            created_at: "2026-05-19T00:00:00Z".to_string(),
+        });
+
+        app.input = "/new".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+
+        app.input = "fresh topic".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+
+        let launched = mirror.launched.borrow();
+        assert_eq!(launched.len(), 2);
+        match &launched[1].conversation {
+            Some(crate::harness::ConversationHint::Init { id }) => {
+                assert_ne!(id, &first_id, "/new must yield a fresh conversation id");
+            }
+            other => panic!("first turn after /new should be Init, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slash_new_is_a_chat_local_command_not_routed_through_cast() {
+        assert!(is_chat_local_slash("/new"));
+        assert!(is_chat_local_slash("/NEW"));
     }
 
     #[test]
