@@ -64,20 +64,19 @@ flowchart TD
   Parse -- ok --> Route{Route exists?}
   Route -- no --> ErrNotFound["404 not_found"]
   Route -- yes --> Validate{Field validation}
-  Validate -- cwd outside root --> ErrCwd["400 project_root_violation"]
+  Validate -- cwd outside root --> ErrInvalid
   Validate -- unknown harness/action --> ErrInvalid
   Validate -- ok --> Action{Resource lookup}
   Action -- session missing --> ErrSession["404 session_not_found"]
   Action -- session not live --> ErrLive["409 session_not_live"]
-  Action -- PTY spawn fails --> ErrPty["500 pty_spawn_failed"]
-  Action -- launch (init write / spawn) fails --> ErrLaunch["500 launch_failed"]
+  Action -- launch (PTY/pipe spawn, init write, harness startup) fails --> ErrLaunch["500 launch_failed"]
   Action -- send_input fails --> ErrSend["500 send_input_failed"]
   Action -- kill_session fails --> ErrKill["500 kill_failed"]
   Action -- runtime down --> ErrRuntime["503 runtime_unavailable"]
   Action -- internal panic --> ErrInternal["500 internal_error"]
   Action -- ok --> Success[Documented success shape]
 
-  ErrInvalid & ErrNotFound & ErrCwd & ErrSession & ErrLive & ErrPty & ErrLaunch & ErrSend & ErrKill & ErrRuntime & ErrInternal -->|"{ error: { code, message, details } }"| Client[Client branches on code]
+  ErrInvalid & ErrNotFound & ErrSession & ErrLive & ErrLaunch & ErrSend & ErrKill & ErrRuntime & ErrInternal -->|"{ error: { code, message, details } }"| Client[Client branches on code]
 ```
 
 All API errors use the following stable envelope. Clients must branch on `error.code`, not `error.message`:

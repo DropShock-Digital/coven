@@ -1087,6 +1087,23 @@ impl App {
             Err(error) => {
                 self.is_responding = false;
                 self.push_system_message(&format!("Input rejected: {error}"));
+                // For stream-mode failures, the long-lived child is
+                // almost certainly dead (daemon returns NotLiveError
+                // when the registry entry is gone, which only happens
+                // after the wait thread reaped the process). Drop the
+                // tracking entry and its buffer so the next user
+                // message cold-starts a fresh stream session instead
+                // of looping into the same dead pipe.
+                if is_stream {
+                    self.harness_stream_session_ids
+                        .retain(|_, id| id != session_id);
+                    self.stream_json_buffers.remove(session_id);
+                    if self.active_session_id.as_deref() == Some(session_id) {
+                        self.active_session_id = None;
+                        self.active_session_harness = None;
+                        self.chat_owns_active_session = false;
+                    }
+                }
             }
         }
     }
@@ -2180,6 +2197,7 @@ mod tests {
         events: Rc<RefCell<Vec<EventRecord>>>,
         event_error: Rc<RefCell<Option<String>>>,
         launch_error: Rc<RefCell<Option<String>>>,
+        send_input_error: Rc<RefCell<Option<String>>>,
     }
 
     impl RecordingChatClient {
@@ -2240,6 +2258,9 @@ mod tests {
             self.calls
                 .borrow_mut()
                 .push(format!("input:{session_id}:{data}"));
+            if let Some(error) = self.send_input_error.borrow().clone() {
+                return Err(anyhow::anyhow!(error));
+            }
             Ok(())
         }
 
@@ -2794,6 +2815,55 @@ mod tests {
             app.harness_stream_session_ids.get("claude").cloned(),
             Some(session_id),
             "first stream launch must register its daemon session id under claude"
+        );
+    }
+
+    #[test]
+    fn stream_send_failure_drops_tracking_so_next_turn_cold_starts() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "first".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let stream_session = app.active_session_id().expect("first launch").to_string();
+        assert!(app.harness_stream_session_ids.contains_key("claude"));
+
+        // Complete the first turn so the next message isn't gated by
+        // is_responding, then arm the mock so the next send_input fails
+        // (e.g. daemon NotLiveError).
+        let result_chunk =
+            r#"{"type":"result","subtype":"success","is_error":false}"#.to_string() + "\n";
+        app.push_event_message(&output_event(1, &stream_session, &result_chunk));
+        *mirror.send_input_error.borrow_mut() = Some("simulated NotLive".to_string());
+
+        app.input = "second".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+
+        // The send to the dead stream session failed — chat must drop
+        // the tracking entry so it doesn't loop back to the same dead
+        // pipe on the third message. Both the per-harness id and the
+        // per-session JSON buffer should be gone, and active state
+        // cleared so the user isn't gated by stale is_responding.
+        assert!(
+            !app.harness_stream_session_ids.contains_key("claude"),
+            "send failure on stream session must drop the per-harness id so the next turn cold-starts"
+        );
+        assert!(!app.stream_json_buffers.contains_key(&stream_session));
+        assert!(app.active_session_id().is_none());
+        assert!(!app.is_responding);
+
+        // Now disarm the mock and prove the next message launches fresh.
+        *mirror.send_input_error.borrow_mut() = None;
+        let launches_before_retype = mirror.launched.borrow().len();
+        app.input = "third".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        assert_eq!(
+            mirror.launched.borrow().len(),
+            launches_before_retype + 1,
+            "after the dead-stream cleanup, next message must cold-start a fresh launch"
         );
     }
 
