@@ -210,14 +210,39 @@ fn interactive_shell_route(
 }
 
 fn run_doctor() -> Result<()> {
+    let home = coven_home_dir()?;
     println!("Coven doctor");
-    println!("Store: {}", coven_home_dir()?.display());
+    println!("Store: {}", home.display());
     match std::env::current_dir()
         .ok()
         .and_then(|cwd| project::canonical_project_root(&cwd).ok())
     {
         Some(root) => println!("Project: {}", root.display()),
         None => println!("Project: not inside a git/project root yet"),
+    }
+
+    println!("\nDaemon:");
+    match daemon::background_server_status(&home)? {
+        Some(daemon::DaemonStatusState::Running(status)) => {
+            println!(
+                "  [OK] status=running pid={} socket={}",
+                status.pid, status.socket
+            );
+        }
+        Some(daemon::DaemonStatusState::Stale(status)) => {
+            println!(
+                "  [!!] status=stale pid={} socket={}",
+                status.pid, status.socket
+            );
+            println!("       Run `coven daemon restart` to rebind the local socket.");
+        }
+        None => {
+            println!(
+                "  [--] status=stopped socket={}",
+                daemon::daemon_socket_path(&home).display()
+            );
+            println!("       Run `coven daemon start` before using daemon-backed clients.");
+        }
     }
 
     println!("\nHarnesses:");

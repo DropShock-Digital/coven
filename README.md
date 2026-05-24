@@ -29,11 +29,18 @@
 
 Coven is still an early local-first MVP, but the npm wrapper is live for supported platforms. The user-facing command is always `coven`.
 
-Try the published package:
+Try the published package without installing it:
 
 ```sh
 npx @opencoven/cli doctor
 pnpm dlx @opencoven/cli doctor
+```
+
+Install it when you want to use the `coven` command repeatedly:
+
+```sh
+npm install -g @opencoven/cli
+coven doctor
 ```
 
 Or build from source:
@@ -65,7 +72,6 @@ Prefer copy/paste commands?
 cd /path/to/your/project
 coven doctor
 coven daemon start
-coven daemon restart
 coven run codex "fix the failing tests"
 coven run claude "polish this UI"
 coven sessions
@@ -74,7 +80,7 @@ coven sessions --plain
 coven sessions --json
 ```
 
-`coven doctor` checks whether supported local harness CLIs are available. `coven run` creates a project-scoped session record, validates the working directory, and launches the selected harness through Coven-managed PTY execution. In a terminal, `coven sessions` opens a human session browser where you can select work and choose visible actions like **Rejoin**, **View Log**, **Summon**, **Archive**, and **Sacrifice** without copying IDs; use `--plain` for scripts or `--json` for client discovery.
+`coven doctor` checks local state, project detection, daemon/socket status, and supported harness CLIs. `coven run` creates a project-scoped session record, validates the working directory, and launches the selected harness through Coven-managed PTY execution. In a terminal, `coven sessions` opens a human session browser where you can select work and choose visible actions like **Rejoin**, **View Log**, **Summon**, **Archive**, and **Sacrifice** without copying IDs; use `--plain` for scripts or `--json` for client discovery.
 
 Coven also provides a rescue loop for OpenClaw contributors and users:
 
@@ -106,7 +112,7 @@ OpenCoven is an open ecosystem for persistent AI familiars: named agents with me
 |---|---|
 | `coven` | Open the beginner-friendly interactive menu |
 | `coven tui` | Explicitly open the slash-command TUI |
-| `coven doctor` | Detect supported harness CLIs and print install hints |
+| `coven doctor` | Check local state, daemon/socket status, harness CLIs, and install hints |
 | `coven daemon start` | Start the local Coven daemon |
 | `coven daemon status` | Show daemon health, pid, and socket path |
 | `coven daemon restart` | Restart the local daemon and rebind the socket |
