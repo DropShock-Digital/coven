@@ -886,10 +886,13 @@ fn render_session_overlay(f: &mut Frame, app: &App, area: Rect) {
                 None => app.active_session_id() == Some(rep.id.as_str()),
             };
             let marker = if is_active { ">" } else { " " };
-            let turn_badge = if turn_count > 1 {
-                format!("{turn_count:>2}t ")
-            } else {
-                "    ".to_string()
+            // Badge is a fixed 4-char field (" 2t ", "12t ", "99+t",
+            // "    ") so the columns to the right stay aligned even
+            // when a single conversation accumulates a lot of turns.
+            let turn_badge = match turn_count {
+                0 | 1 => "    ".to_string(),
+                2..=99 => format!("{turn_count:>2}t "),
+                _ => "99+t".to_string(),
             };
             lines.push(Line::from(vec![
                 Span::styled(format!(" {marker} "), theme::ratatui_style(PRIMARY)),
@@ -1489,6 +1492,30 @@ mod tests {
         for entry in &entries {
             assert!(matches!(entry, SessionOverlayEntry::Singleton { .. }));
         }
+    }
+
+    #[test]
+    fn turn_badge_format_keeps_a_fixed_four_char_width_at_every_count() {
+        // Reproduce render_session_overlay's badge logic in isolation so
+        // we can assert the column doesn't grow once a conversation
+        // exceeds 99 turns.
+        let badge = |turn_count: usize| -> String {
+            match turn_count {
+                0 | 1 => "    ".to_string(),
+                2..=99 => format!("{turn_count:>2}t "),
+                _ => "99+t".to_string(),
+            }
+        };
+        for n in [0_usize, 1, 2, 9, 10, 42, 99, 100, 250, 9999] {
+            let rendered = badge(n);
+            assert_eq!(
+                rendered.chars().count(),
+                4,
+                "badge for turn_count={n} must be 4 chars wide, got {rendered:?}"
+            );
+        }
+        assert_eq!(badge(100), "99+t");
+        assert_eq!(badge(7), " 7t ");
     }
 
     #[test]

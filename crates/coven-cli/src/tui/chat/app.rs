@@ -568,15 +568,35 @@ impl App {
     /// logged but don't block the caller. Used by `/clear`, `/new`, and
     /// `shutdown` to ensure the next message cold-starts a fresh stream
     /// process (or no process at all, on exit).
+    ///
+    /// Also clears `active_session_id` if it points at one of the killed
+    /// sessions and adds each killed id to `suppressed_session_ids`, so
+    /// the user's "Chat cleared."/"Started a new conversation." line
+    /// isn't followed by an orphan "Session kill recorded." once the
+    /// daemon's kill event eventually polls in.
     fn kill_all_stream_sessions(&mut self) {
         let ids: Vec<String> = self.harness_stream_session_ids.values().cloned().collect();
-        for id in ids {
-            if let Err(error) = self.client.kill_session(&id) {
+        for id in &ids {
+            if let Err(error) = self.client.kill_session(id) {
                 self.push_system_message(&format!(
                     "Stream session {id} kill failed: {error}. Daemon may still hold it."
                 ));
             }
-            self.stream_json_buffers.remove(&id);
+            self.stream_json_buffers.remove(id);
+            // Suppress the impending kill/exit events for this session so
+            // they don't leak back into the transcript after the user
+            // reset state.
+            self.suppressed_session_ids.insert(id.clone());
+            // If the active session is one we're tearing down, clear the
+            // active-session fields now so the event poller stops
+            // chasing it and the next user input is treated as a fresh
+            // turn rather than a "reply still streaming" rejection.
+            if self.active_session_id.as_deref() == Some(id.as_str()) {
+                self.active_session_id = None;
+                self.active_session_harness = None;
+                self.chat_owns_active_session = false;
+                self.is_responding = false;
+            }
         }
         self.harness_stream_session_ids.clear();
     }
@@ -2901,6 +2921,49 @@ mod tests {
         assert!(
             !app.stream_json_buffers.contains_key(&session_id),
             "exit must drop the per-session JSON buffer so it doesn't leak across the chat"
+        );
+    }
+
+    #[test]
+    fn clear_transcript_suppresses_the_orphan_kill_event_so_it_doesnt_echo_after_chat_cleared() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "hi".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let stream_id = app.active_session_id().expect("first launch").to_string();
+
+        app.clear_transcript();
+
+        // The kill request fires synchronously; the daemon's resulting
+        // `kill` event arrives later via polling. /clear must
+        // pre-suppress the failed session so that event doesn't push
+        // "Session kill recorded." back into the just-cleared transcript.
+        assert!(
+            app.suppressed_session_ids.contains(&stream_id),
+            "killed stream session must be suppressed so its kill event doesn't echo after /clear"
+        );
+        // And the active-session state must be cleared so the next
+        // user input isn't gated by stale is_responding.
+        assert!(app.active_session_id().is_none());
+        assert!(!app.is_responding);
+
+        // Simulate the delayed kill event arriving — it must NOT push
+        // "Session kill recorded." into the transcript now.
+        app.push_event_message(&EventRecord {
+            seq: 1,
+            id: "event-kill".to_string(),
+            session_id: stream_id.clone(),
+            kind: "kill".to_string(),
+            payload_json: "{}".to_string(),
+            created_at: "2026-05-19T00:00:00Z".to_string(),
+        });
+        assert!(
+            !app.messages
+                .iter()
+                .any(|m| m.content.contains("Session kill recorded")),
+            "kill event for a suppressed stream session must not surface"
         );
     }
 
