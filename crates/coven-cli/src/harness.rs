@@ -18,6 +18,27 @@ pub enum HarnessLaunchMode {
     NonInteractive,
 }
 
+/// Hint passed when a chat turn wants to participate in a multi-turn
+/// conversation by reusing the underlying harness CLI's session-resume
+/// mechanism. Only consulted in `NonInteractive` mode today.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConversationHint {
+    /// First turn of a conversation. The harness should create a session
+    /// claimed under this id so later turns can resume it.
+    Init { id: String },
+    /// Subsequent turn. The harness should resume the session at this id and
+    /// append the new prompt to its history.
+    Resume { id: String },
+}
+
+impl ConversationHint {
+    pub fn id(&self) -> &str {
+        match self {
+            ConversationHint::Init { id } | ConversationHint::Resume { id } => id,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessCommandSpec {
     pub id: &'static str,
@@ -82,17 +103,69 @@ pub fn built_in_harness_specs() -> Vec<HarnessCommandSpec> {
     ]
 }
 
+#[allow(dead_code)]
 pub fn command_parts_for_harness(
     harness_id: &str,
     prompt: &str,
     mode: HarnessLaunchMode,
+) -> Result<(&'static str, Vec<String>)> {
+    command_parts_for_harness_with_conversation(harness_id, prompt, mode, None)
+}
+
+/// Build a harness command line, optionally injecting session-continuity flags
+/// so the harness CLI resumes a prior conversation. Only Claude is wired up
+/// today; other harnesses ignore the hint and fall back to one-shot args.
+/// See `docs/chat-persistence.md` for how to extend this for Codex.
+pub fn command_parts_for_harness_with_conversation(
+    harness_id: &str,
+    prompt: &str,
+    mode: HarnessLaunchMode,
+    hint: Option<&ConversationHint>,
 ) -> Result<(&'static str, Vec<String>)> {
     let spec = built_in_harness_specs()
         .into_iter()
         .find(|spec| spec.id == harness_id)
         .ok_or_else(|| anyhow!("unsupported harness `{harness_id}`"))?;
 
+    if let Some(hint) = hint {
+        if let Some(args) = continuity_args(&spec, mode, hint) {
+            return Ok((spec.executable, args.into_iter().chain(std::iter::once(prompt.to_string())).collect()));
+        }
+    }
+
     Ok((spec.executable, spec.prompt_args(prompt, mode)))
+}
+
+/// Per-harness translation of a `ConversationHint` into CLI args that precede
+/// the prompt. Returns `None` when the harness has no resume support (or when
+/// the launch mode doesn't support it) so the caller falls back to defaults.
+fn continuity_args(
+    spec: &HarnessCommandSpec,
+    mode: HarnessLaunchMode,
+    hint: &ConversationHint,
+) -> Option<Vec<String>> {
+    // Continuity only makes sense in non-interactive mode today. Interactive
+    // mode launches the harness TUI, which has its own resume picker.
+    if mode != HarnessLaunchMode::NonInteractive {
+        return None;
+    }
+    match spec.id {
+        "claude" => {
+            let flag = match hint {
+                ConversationHint::Init { .. } => "--session-id",
+                ConversationHint::Resume { .. } => "--resume",
+            };
+            Some(vec![
+                "--print".to_string(),
+                flag.to_string(),
+                hint.id().to_string(),
+            ])
+        }
+        // Codex resume support lives in `codex exec resume <id>` and would
+        // need to capture the id from the first run's output. Tracked in
+        // `docs/chat-persistence.md`.
+        _ => None,
+    }
 }
 
 fn executable_exists(executable: &str) -> bool {
@@ -326,6 +399,114 @@ mod tests {
                 .to_string()
                 .contains("unsupported harness")
         );
+    }
+
+    #[test]
+    fn claude_init_hint_attaches_session_id_flag_in_print_mode() -> anyhow::Result<()> {
+        let hint = ConversationHint::Init {
+            id: "abc-123".to_string(),
+        };
+        let parts = command_parts_for_harness_with_conversation(
+            "claude",
+            "hello",
+            HarnessLaunchMode::NonInteractive,
+            Some(&hint),
+        )?;
+        assert_eq!(
+            parts,
+            (
+                "claude",
+                vec![
+                    "--print".to_string(),
+                    "--session-id".to_string(),
+                    "abc-123".to_string(),
+                    "hello".to_string(),
+                ]
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn claude_resume_hint_attaches_resume_flag_in_print_mode() -> anyhow::Result<()> {
+        let hint = ConversationHint::Resume {
+            id: "abc-123".to_string(),
+        };
+        let parts = command_parts_for_harness_with_conversation(
+            "claude",
+            "follow up",
+            HarnessLaunchMode::NonInteractive,
+            Some(&hint),
+        )?;
+        assert_eq!(
+            parts,
+            (
+                "claude",
+                vec![
+                    "--print".to_string(),
+                    "--resume".to_string(),
+                    "abc-123".to_string(),
+                    "follow up".to_string(),
+                ]
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn interactive_mode_ignores_conversation_hint() -> anyhow::Result<()> {
+        let hint = ConversationHint::Init {
+            id: "abc-123".to_string(),
+        };
+        let parts = command_parts_for_harness_with_conversation(
+            "claude",
+            "hello",
+            HarnessLaunchMode::Interactive,
+            Some(&hint),
+        )?;
+        assert_eq!(parts, ("claude", vec!["hello".to_string()]));
+        Ok(())
+    }
+
+    #[test]
+    fn codex_ignores_conversation_hint_today() -> anyhow::Result<()> {
+        let hint = ConversationHint::Init {
+            id: "abc-123".to_string(),
+        };
+        let parts = command_parts_for_harness_with_conversation(
+            "codex",
+            "fix tests",
+            HarnessLaunchMode::NonInteractive,
+            Some(&hint),
+        )?;
+        assert_eq!(
+            parts,
+            (
+                "codex",
+                vec![
+                    "exec".to_string(),
+                    "--skip-git-repo-check".to_string(),
+                    "--color".to_string(),
+                    "never".to_string(),
+                    "fix tests".to_string(),
+                ]
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn none_hint_matches_legacy_command_parts() -> anyhow::Result<()> {
+        let with_none = command_parts_for_harness_with_conversation(
+            "claude",
+            "hello",
+            HarnessLaunchMode::NonInteractive,
+            None,
+        )?;
+        let legacy =
+            command_parts_for_harness("claude", "hello", HarnessLaunchMode::NonInteractive)?;
+        assert_eq!(with_none, legacy);
+        Ok(())
     }
 
     #[cfg(unix)]

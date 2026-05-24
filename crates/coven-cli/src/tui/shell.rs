@@ -1131,6 +1131,7 @@ fn dispatch_via_daemon(
         launch_mode: crate::harness::HarnessLaunchMode::Interactive,
         prompt: prompt.to_string(),
         title,
+        conversation: None,
     };
 
     let mut client = DaemonChatClient::default();

@@ -1,8 +1,11 @@
 //! Chat application state, behavior, and helpers. Owns `App` and all of its
 //! methods; provides `discover_agents` and the spinner-frame data.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+
+use uuid::Uuid;
 
 use crate::{
     harness, store,
@@ -100,6 +103,15 @@ pub(super) struct App {
     /// Timestamp of the most recent Ctrl+C press, used to require a double
     /// tap before exiting so a stray ^C doesn't kill the session.
     last_interrupt_at: Option<Instant>,
+    /// Per-harness conversation ids so chat turns reuse the harness CLI's
+    /// own session-resume mechanism (today only `claude --session-id` /
+    /// `--resume`). Reset on `/clear`. See `docs/chat-persistence.md`.
+    harness_conversation_ids: HashMap<String, String>,
+    /// True when `active_session_id` points at a session this chat launched
+    /// as a turn (so the next message should be a fresh launch + resume).
+    /// False when the user `/attach`ed an externally-spawned session, in
+    /// which case typing is forwarded as stdin to that PTY.
+    chat_owns_active_session: bool,
     client: Box<dyn ChatClient>,
 }
 
@@ -229,6 +241,8 @@ impl App {
             slash_suggestion_index: 0,
             slash_popup_dismissed: false,
             last_interrupt_at: None,
+            harness_conversation_ids: HashMap::new(),
+            chat_owns_active_session: false,
             client,
         };
 
@@ -407,9 +421,24 @@ impl App {
             return Some(result);
         }
 
-        if let Some(session_id) = self.active_session_id.clone() {
+        // If the user is talking to an externally-spawned session they
+        // `/attach`ed to, keep the legacy "type forwards as stdin" flow —
+        // it's how you drive a long-running `coven run` task. Chat-owned
+        // sessions take the resume path instead.
+        if let Some(session_id) = self
+            .active_session_id
+            .clone()
+            .filter(|_| !self.chat_owns_active_session)
+        {
             self.forward_input_to_session(&session_id, &raw);
+        } else if self.is_responding {
+            self.push_system_message(
+                "Previous reply is still streaming. Wait for it to finish or press Ctrl+C to interrupt.",
+            );
         } else {
+            // Always launch a fresh daemon session per chat turn; the harness
+            // CLI (today only Claude) carries conversation state through
+            // `--session-id` / `--resume`. See docs/chat-persistence.md.
             self.launch_chat_session(&raw);
         }
         self.scroll_to_bottom();
@@ -418,10 +447,12 @@ impl App {
 
     /// Clear the visible transcript and reset scroll, matching what `/clear`
     /// does. Used by Ctrl+L so the keybind doesn't have to fake a slash
-    /// command through the parser.
+    /// command through the parser. Also drops the harness conversation ids so
+    /// the next turn starts a fresh `--session-id`-claimed thread.
     pub(super) fn clear_transcript(&mut self) {
         self.messages.clear();
         self.scroll_offset = 0;
+        self.harness_conversation_ids.clear();
         self.push_system_message("Chat cleared.");
     }
 
@@ -744,11 +775,16 @@ impl App {
     fn run_harness_prompt(&mut self, harness: &str, prompt: &str) -> Option<store::SessionRecord> {
         self.is_responding = true;
         self.agent_output_mode = AgentOutputMode::Unknown;
-        let result = LaunchRequest::for_current_dir(harness, prompt)
-            .and_then(|request| self.client.launch_session(request));
+        let hint = self.conversation_hint_for_harness(harness);
+        let result = LaunchRequest::for_current_dir(harness, prompt).map(|request| match hint {
+            Some(hint) => request.with_conversation(hint),
+            None => request,
+        });
+        let result = result.and_then(|request| self.client.launch_session(request));
         match result {
             Ok(session) => {
                 self.active_session_id = Some(session.id.clone());
+                self.chat_owns_active_session = true;
                 self.last_event_seq = None;
                 self.reset_event_poll_failures();
                 self.push_system_message("Connected. Waiting for the reply.");
@@ -765,6 +801,26 @@ impl App {
         }
     }
 
+    /// Decide whether a launch for `harness` should ride a resumable chat
+    /// session, and if so produce the right hint (Init for the first turn,
+    /// Resume for subsequent turns). Records the id on first use so later
+    /// turns route through `--resume`.
+    fn conversation_hint_for_harness(&mut self, harness: &str) -> Option<harness::ConversationHint> {
+        if !harness_supports_chat_resume(harness) {
+            return None;
+        }
+        if let Some(id) = self.harness_conversation_ids.get(harness) {
+            return Some(harness::ConversationHint::Resume { id: id.clone() });
+        }
+        let id = Uuid::new_v4().to_string();
+        self.harness_conversation_ids
+            .insert(harness.to_string(), id.clone());
+        Some(harness::ConversationHint::Init { id })
+    }
+
+    /// Send raw text as stdin to a session the user `/attach`ed to (i.e. one
+    /// chat did not launch). Chat-owned sessions never take this path; they
+    /// resume via a fresh `--resume` launch instead.
     fn forward_input_to_session(&mut self, session_id: &str, raw: &str) {
         self.is_responding = true;
         let result = self.client.send_input(session_id, &format!("{raw}\n"));
@@ -781,6 +837,7 @@ impl App {
         match self.client.get_session(session_id) {
             Ok(session) => {
                 self.active_session_id = Some(session.id.clone());
+                self.chat_owns_active_session = false;
                 self.last_event_seq = None;
                 self.agent_output_mode = AgentOutputMode::Unknown;
                 self.reset_event_poll_failures();
@@ -833,6 +890,7 @@ impl App {
             Ok(()) => {
                 if self.active_session_id.as_deref() == Some(session_id) {
                     self.active_session_id = None;
+                    self.chat_owns_active_session = false;
                 }
                 self.push_system_message(&format!("Sacrificed session {session_id}."));
             }
@@ -927,6 +985,7 @@ impl App {
                 self.is_responding = false;
                 if self.active_session_id.as_deref() == Some(event.session_id.as_str()) {
                     self.active_session_id = None;
+                    self.chat_owns_active_session = false;
                 }
                 self.agent_output_mode = AgentOutputMode::Unknown;
                 self.push_system_message(&format!("Session {status}."));
@@ -935,6 +994,7 @@ impl App {
                 self.flush_pending_agent_buffer();
                 if self.active_session_id.as_deref() == Some(event.session_id.as_str()) {
                     self.active_session_id = None;
+                    self.chat_owns_active_session = false;
                     self.is_responding = false;
                 }
                 self.agent_output_mode = AgentOutputMode::Unknown;
@@ -1319,6 +1379,15 @@ fn is_chat_local_slash(input: &str) -> bool {
 fn should_keep_launch_inline(plan: &CastPlan) -> bool {
     !matches!(plan.intent, CastIntent::NaturalSpell { .. })
         || !matches!(plan.risk(), CastRisk::Safe)
+}
+
+/// Whether a chat turn launched against this harness should reuse the prior
+/// turn's conversation via the harness CLI's session-resume mechanism. Today
+/// only Claude supports this through `--session-id` / `--resume`; Codex
+/// support would land in `harness::continuity_args`. See
+/// `docs/chat-persistence.md`.
+fn harness_supports_chat_resume(harness: &str) -> bool {
+    harness == "claude"
 }
 
 fn format_cast_plan_for_chat(plan: &CastPlan) -> String {
@@ -1719,7 +1788,149 @@ mod tests {
     }
 
     #[test]
-    fn plain_chat_input_launches_interactive_daemon_session_without_mock_response() {
+    fn first_claude_chat_turn_attaches_init_conversation_hint() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "hello".to_string();
+        app.cursor_pos = app.input.len();
+
+        app.handle_input();
+
+        let launched = mirror.launched.borrow();
+        assert_eq!(launched.len(), 1);
+        assert_eq!(launched[0].harness, "claude");
+        match &launched[0].conversation {
+            Some(crate::harness::ConversationHint::Init { id }) => {
+                assert!(!id.is_empty(), "Init id must be a non-empty uuid");
+            }
+            other => panic!("first turn should carry Init hint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn second_claude_chat_turn_reuses_init_id_as_resume() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "first".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let first_session_id = app.active_session_id().expect("first launch sets id").to_string();
+        let init_id = match &mirror.launched.borrow()[0].conversation {
+            Some(crate::harness::ConversationHint::Init { id }) => id.clone(),
+            other => panic!("first turn should be Init, got {other:?}"),
+        };
+
+        // Simulate harness exit so the next turn isn't gated by is_responding.
+        app.push_event_message(&EventRecord {
+            seq: 1,
+            id: "event-1".to_string(),
+            session_id: first_session_id,
+            kind: "exit".to_string(),
+            payload_json: serde_json::json!({ "status": "completed" }).to_string(),
+            created_at: "2026-05-19T00:00:00Z".to_string(),
+        });
+
+        app.input = "second".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+
+        let launched = mirror.launched.borrow();
+        assert_eq!(launched.len(), 2);
+        match &launched[1].conversation {
+            Some(crate::harness::ConversationHint::Resume { id }) => {
+                assert_eq!(id, &init_id, "second turn must resume the first turn's id");
+            }
+            other => panic!("second turn should carry Resume hint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn clear_transcript_drops_conversation_ids_so_next_turn_is_init() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "first".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let session_id = app.active_session_id().expect("first launch sets id").to_string();
+        app.push_event_message(&EventRecord {
+            seq: 1,
+            id: "event-1".to_string(),
+            session_id,
+            kind: "exit".to_string(),
+            payload_json: serde_json::json!({ "status": "completed" }).to_string(),
+            created_at: "2026-05-19T00:00:00Z".to_string(),
+        });
+
+        app.clear_transcript();
+
+        app.input = "fresh".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+
+        let launched = mirror.launched.borrow();
+        assert_eq!(launched.len(), 2);
+        let init_id_1 = match &launched[0].conversation {
+            Some(crate::harness::ConversationHint::Init { id }) => id.clone(),
+            other => panic!("expected first Init, got {other:?}"),
+        };
+        match &launched[1].conversation {
+            Some(crate::harness::ConversationHint::Init { id }) => {
+                assert_ne!(id, &init_id_1, "/clear should yield a fresh conversation id");
+            }
+            other => panic!("expected Init after /clear, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn codex_chat_turn_carries_no_conversation_hint_today() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(0); // codex
+        app.input = "do a thing".to_string();
+        app.cursor_pos = app.input.len();
+
+        app.handle_input();
+
+        let launched = mirror.launched.borrow();
+        assert_eq!(launched.len(), 1);
+        assert_eq!(launched[0].harness, "codex");
+        assert!(
+            launched[0].conversation.is_none(),
+            "codex has no resume support yet — see docs/chat-persistence.md"
+        );
+    }
+
+    #[test]
+    fn chat_input_while_responding_does_not_launch_a_second_session() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "first".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        assert!(app.is_responding, "first turn should set is_responding");
+
+        // Second send while previous reply is still streaming.
+        app.input = "too soon".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+
+        assert_eq!(
+            mirror.launched.borrow().len(),
+            1,
+            "second send while is_responding must not launch a fresh session"
+        );
+        assert!(app
+            .messages
+            .iter()
+            .any(|message| message.content.contains("still streaming")));
+    }
+
+    #[test]
+    fn plain_chat_input_launches_non_interactive_daemon_session_without_mock_response() {
         let client = RecordingChatClient::default();
         let (mut app, mirror) = app_with_client(client);
         app.input = "summarize the repo".to_string();
@@ -1734,7 +1945,7 @@ mod tests {
         assert_eq!(launched[0].prompt, "summarize the repo");
         assert_eq!(
             launched[0].launch_mode,
-            crate::harness::HarnessLaunchMode::Interactive
+            crate::harness::HarnessLaunchMode::NonInteractive
         );
         assert!(app.active_session_id().is_some());
         assert!(app.messages.iter().any(|message| message

@@ -58,7 +58,22 @@ pub fn build_harness_command(
     cwd: &Path,
     mode: crate::harness::HarnessLaunchMode,
 ) -> Result<HarnessCommand> {
-    let (program, args) = crate::harness::command_parts_for_harness(harness_id, prompt, mode)?;
+    build_harness_command_with_conversation(harness_id, prompt, cwd, mode, None)
+}
+
+pub fn build_harness_command_with_conversation(
+    harness_id: &str,
+    prompt: &str,
+    cwd: &Path,
+    mode: crate::harness::HarnessLaunchMode,
+    conversation: Option<&crate::harness::ConversationHint>,
+) -> Result<HarnessCommand> {
+    let (program, args) = crate::harness::command_parts_for_harness_with_conversation(
+        harness_id,
+        prompt,
+        mode,
+        conversation,
+    )?;
 
     Ok(HarnessCommand {
         program: program.to_string(),

@@ -89,11 +89,12 @@ impl LiveSessionRuntime {
 
 impl SessionRuntime for LiveSessionRuntime {
     fn launch_session(&self, launch: &SessionLaunch) -> Result<()> {
-        let command = pty_runner::build_harness_command(
+        let command = pty_runner::build_harness_command_with_conversation(
             &launch.harness,
             &launch.prompt,
             Path::new(&launch.cwd),
             launch.launch_mode,
+            launch.conversation.as_ref(),
         )?;
         let observer = self
             .coven_home

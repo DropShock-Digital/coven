@@ -27,6 +27,7 @@ pub(crate) struct LaunchRequest {
     pub(crate) launch_mode: harness::HarnessLaunchMode,
     pub(crate) prompt: String,
     pub(crate) title: String,
+    pub(crate) conversation: Option<harness::ConversationHint>,
 }
 
 impl LaunchRequest {
@@ -38,10 +39,16 @@ impl LaunchRequest {
             project_root: cwd.clone(),
             cwd,
             harness: harness.to_string(),
-            launch_mode: harness::HarnessLaunchMode::Interactive,
+            launch_mode: harness::HarnessLaunchMode::NonInteractive,
             prompt: prompt.to_string(),
             title: session_title(prompt),
+            conversation: None,
         })
+    }
+
+    pub(crate) fn with_conversation(mut self, hint: harness::ConversationHint) -> Self {
+        self.conversation = Some(hint);
+        self
     }
 }
 
@@ -158,21 +165,28 @@ impl DaemonChatClient {
 
 impl ChatClient for DaemonChatClient {
     fn launch_session(&mut self, request: LaunchRequest) -> Result<store::SessionRecord> {
-        self.request_json(
-            "POST",
-            "/api/v1/sessions",
-            Some(json!({
-                "projectRoot": request.project_root,
-                "cwd": request.cwd,
-                "harness": request.harness,
-                "launchMode": match request.launch_mode {
-                    harness::HarnessLaunchMode::Interactive => "interactive",
-                    harness::HarnessLaunchMode::NonInteractive => "nonInteractive",
-                },
-                "prompt": request.prompt,
-                "title": request.title,
-            })),
-        )
+        let mut body = json!({
+            "projectRoot": request.project_root,
+            "cwd": request.cwd,
+            "harness": request.harness,
+            "launchMode": match request.launch_mode {
+                harness::HarnessLaunchMode::Interactive => "interactive",
+                harness::HarnessLaunchMode::NonInteractive => "nonInteractive",
+            },
+            "prompt": request.prompt,
+            "title": request.title,
+        });
+        if let Some(hint) = request.conversation.as_ref() {
+            let (mode, id) = match hint {
+                harness::ConversationHint::Init { id } => ("init", id),
+                harness::ConversationHint::Resume { id } => ("resume", id),
+            };
+            body.as_object_mut().expect("json! literal is an object").insert(
+                "conversation".to_string(),
+                json!({"mode": mode, "id": id}),
+            );
+        }
+        self.request_json("POST", "/api/v1/sessions", Some(body))
     }
 
     fn get_session(&mut self, session_id: &str) -> Result<store::SessionRecord> {
@@ -378,17 +392,35 @@ mod tests {
     }
 
     #[test]
-    fn launch_request_uses_current_dir_and_interactive_mode_for_chat() -> Result<()> {
+    fn launch_request_uses_current_dir_and_non_interactive_mode_for_chat() -> Result<()> {
         let request = LaunchRequest::for_current_dir("codex", "summarize")?;
 
         assert_eq!(request.harness, "codex");
         assert_eq!(request.prompt, "summarize");
         assert_eq!(
             request.launch_mode,
-            crate::harness::HarnessLaunchMode::Interactive
+            crate::harness::HarnessLaunchMode::NonInteractive
         );
+        assert!(request.conversation.is_none());
         assert!(!request.project_root.is_empty());
         assert_eq!(request.project_root, request.cwd);
+        Ok(())
+    }
+
+    #[test]
+    fn with_conversation_attaches_resume_hint() -> Result<()> {
+        let request = LaunchRequest::for_current_dir("claude", "next turn")?.with_conversation(
+            crate::harness::ConversationHint::Resume {
+                id: "abc-123".to_string(),
+            },
+        );
+
+        assert_eq!(
+            request.conversation,
+            Some(crate::harness::ConversationHint::Resume {
+                id: "abc-123".to_string()
+            })
+        );
         Ok(())
     }
 }

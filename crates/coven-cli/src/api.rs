@@ -6,7 +6,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::{control_plane, daemon::DaemonStatus, harness::HarnessLaunchMode, project, store};
+use crate::{
+    control_plane,
+    daemon::DaemonStatus,
+    harness::{ConversationHint, HarnessLaunchMode},
+    project, store,
+};
 
 const MAX_EVENTS_LIMIT: i64 = 1_000;
 pub const COVEN_API_VERSION: &str = "v1";
@@ -63,6 +68,7 @@ pub struct SessionLaunch {
     pub launch_mode: HarnessLaunchMode,
     pub prompt: String,
     pub title: String,
+    pub conversation: Option<ConversationHint>,
 }
 
 pub trait SessionRuntime {
@@ -284,6 +290,8 @@ fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
         .unwrap_or(&prompt)
         .to_string();
 
+    let conversation = conversation_from_payload(&payload)?;
+
     Ok(SessionLaunch {
         id: Uuid::new_v4().to_string(),
         project_root: canonical_project_root.to_string_lossy().into_owned(),
@@ -292,6 +300,7 @@ fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
         launch_mode,
         prompt,
         title,
+        conversation,
     })
 }
 
@@ -302,6 +311,34 @@ fn launch_mode_from_payload(payload: &Value) -> Result<HarnessLaunchMode> {
         Some(other) => {
             anyhow::bail!("launchMode must be `interactive` or `nonInteractive`, got `{other}`")
         }
+    }
+}
+
+fn conversation_from_payload(payload: &Value) -> Result<Option<ConversationHint>> {
+    let Some(value) = payload.get("conversation") else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    let object = value
+        .as_object()
+        .context("conversation must be an object with `mode` and `id` fields")?;
+    let mode = object
+        .get("mode")
+        .and_then(Value::as_str)
+        .context("conversation.mode is required and must be `init` or `resume`")?;
+    let id = object
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .context("conversation.id is required and must be a non-empty string")?
+        .to_string();
+    match mode {
+        "init" => Ok(Some(ConversationHint::Init { id })),
+        "resume" => Ok(Some(ConversationHint::Resume { id })),
+        other => anyhow::bail!("conversation.mode must be `init` or `resume`, got `{other}`"),
     }
 }
 
@@ -835,6 +872,106 @@ mod tests {
             runtime.launches.borrow()[0].launch_mode,
             HarnessLaunchMode::NonInteractive
         );
+        Ok(())
+    }
+
+    #[test]
+    fn launch_request_threads_conversation_hint_through_to_runtime() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let project_root = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&project_root)?;
+        let runtime = RecordingRuntime::default();
+        let body = json!({
+            "projectRoot": project_root,
+            "harness": "claude",
+            "launchMode": "nonInteractive",
+            "prompt": "hello",
+            "conversation": {"mode": "init", "id": "abc-123"}
+        })
+        .to_string();
+
+        let response = handle_request_with_runtime(
+            "POST",
+            "/sessions",
+            temp_dir.path(),
+            None,
+            Some(&body),
+            &runtime,
+        )?;
+
+        assert_eq!(response.status, 201);
+        assert_eq!(
+            runtime.launches.borrow()[0].conversation,
+            Some(ConversationHint::Init {
+                id: "abc-123".to_string()
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn launch_request_accepts_resume_conversation_hint() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let project_root = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&project_root)?;
+        let runtime = RecordingRuntime::default();
+        let body = json!({
+            "projectRoot": project_root,
+            "harness": "claude",
+            "launchMode": "nonInteractive",
+            "prompt": "follow up",
+            "conversation": {"mode": "resume", "id": "abc-123"}
+        })
+        .to_string();
+
+        handle_request_with_runtime(
+            "POST",
+            "/sessions",
+            temp_dir.path(),
+            None,
+            Some(&body),
+            &runtime,
+        )?;
+
+        assert_eq!(
+            runtime.launches.borrow()[0].conversation,
+            Some(ConversationHint::Resume {
+                id: "abc-123".to_string()
+            })
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn launch_request_rejects_malformed_conversation_mode() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let project_root = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&project_root)?;
+        let runtime = RecordingRuntime::default();
+        let body = json!({
+            "projectRoot": project_root,
+            "harness": "claude",
+            "launchMode": "nonInteractive",
+            "prompt": "hi",
+            "conversation": {"mode": "forge", "id": "abc"}
+        })
+        .to_string();
+
+        let result = handle_request_with_runtime(
+            "POST",
+            "/sessions",
+            temp_dir.path(),
+            None,
+            Some(&body),
+            &runtime,
+        );
+
+        let error = result.unwrap_err();
+        assert!(
+            error.to_string().contains("conversation.mode"),
+            "expected error to mention conversation.mode, got: {error}"
+        );
+        assert!(runtime.launches.borrow().is_empty());
         Ok(())
     }
 
