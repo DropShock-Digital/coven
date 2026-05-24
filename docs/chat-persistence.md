@@ -25,15 +25,26 @@ Two slash verbs reset state:
   visible transcript. Use it when you want to start a fresh thread but
   still scroll up to reference the prior exchange.
 
-Each chat turn still launches a fresh daemon session under the hood, but
-the daemon's session store now carries a `conversation_id` column that
-groups the turns. The chat passes the harness conversation id (claude's
-session uuid, or codex's captured id) as `conversationId` in every launch
-payload, and the `/sessions` overlay collapses sessions that share an id
-into a single row with an `Nt` turn-count badge. Codex's *first* turn
-lands ungrouped because chat doesn't learn codex's id until it appears in
-output; subsequent codex turns and every claude turn group cleanly. The
-column also flows through to `coven sessions` for non-TUI clients.
+The daemon's session store carries a `conversation_id` column so the
+`/sessions` overlay can collapse multi-turn chat threads into a single
+visible row. The chat passes the harness conversation id as
+`conversationId` in every launch payload. Behavior differs between
+harnesses because they have different process models:
+
+- **Codex (per-turn)**: every chat turn cold-starts a new daemon session
+  carrying the same `conversation_id`. The `/sessions` overlay collapses
+  the N rows into one entry with an `Nt` turn-count badge that
+  increments with each turn. Codex's *first* turn lands ungrouped
+  because chat doesn't learn codex's id until it appears in output;
+  subsequent codex turns and the rest group cleanly.
+- **Claude (stream-mode)**: only the *first* turn creates a daemon
+  session row; subsequent turns are piped into the same long-lived
+  process via stdin, with no fresh ledger row per turn. So the overlay
+  shows one row per claude chat (no badge — singleton). To see the
+  per-turn breakdown, drill into the session's events.
+
+The `conversation_id` column also flows through to `coven sessions` for
+non-TUI clients.
 
 The two harnesses differ in *who assigns the session id*:
 

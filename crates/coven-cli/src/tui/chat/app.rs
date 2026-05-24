@@ -507,9 +507,15 @@ impl App {
                 "Previous reply is still streaming. Wait for it to finish or press Ctrl+C to interrupt.",
             );
         } else {
-            // Always launch a fresh daemon session per chat turn; the harness
-            // CLI (today only Claude) carries conversation state through
-            // `--session-id` / `--resume`. See docs/chat-persistence.md.
+            // Route into the chat-launch path. Non-stream harnesses (codex
+            // today) cold-start a fresh daemon session per turn, carrying
+            // conversation state through the harness CLI's own resume
+            // mechanism (--session-id/--resume for claude when not in
+            // stream mode, `exec resume <id>` for codex). Stream-mode
+            // harnesses (claude on unix) take a fast-path inside
+            // `run_harness_prompt` that reuses the existing long-lived
+            // daemon session via `forward_input_to_session` instead.
+            // See docs/chat-persistence.md.
             self.launch_chat_session(&raw);
         }
         self.scroll_to_bottom();
@@ -547,9 +553,10 @@ impl App {
     }
 
     /// Kill every tracked stream-mode daemon session and clear our local
-    /// map. Best-effort: kill failures are logged but don't block the
-    /// caller. Used by `/clear` and `/new` to ensure the next message
-    /// cold-starts a fresh stream process.
+    /// map (including the per-session JSON buffers — leaving those behind
+    /// would leak across a long chat). Best-effort: kill failures are
+    /// logged but don't block the caller. Used by `/clear` and `/new` to
+    /// ensure the next message cold-starts a fresh stream process.
     fn kill_all_stream_sessions(&mut self) {
         let ids: Vec<String> = self.harness_stream_session_ids.values().cloned().collect();
         for id in ids {
@@ -558,6 +565,7 @@ impl App {
                     "Stream session {id} kill failed: {error}. Daemon may still hold it."
                 ));
             }
+            self.stream_json_buffers.remove(&id);
         }
         self.harness_stream_session_ids.clear();
     }
@@ -1214,11 +1222,14 @@ impl App {
         }
         self.harness_conversation_ids.remove(&harness);
         // The dying stream session (if any) can't be reused: claude rejected
-        // its --resume id and is about to exit. Drop it so the auto-retry
-        // cold-starts a fresh stream process instead of forwarding to a
-        // half-dead pipe. The eventual exit event will be ignored thanks
-        // to the suppression entry below.
-        self.harness_stream_session_ids.remove(&harness);
+        // its --resume id and is about to exit. Drop it (and its JSON
+        // line buffer) so the auto-retry cold-starts a fresh stream
+        // process instead of forwarding to a half-dead pipe. The
+        // eventual exit event will be ignored thanks to the suppression
+        // entry below.
+        if let Some(stale_stream_id) = self.harness_stream_session_ids.remove(&harness) {
+            self.stream_json_buffers.remove(&stale_stream_id);
+        }
         self.persist_conversations();
         // Hide any further output and the eventual exit event for the
         // failed session so the user only sees the system message + the
@@ -1396,9 +1407,11 @@ impl App {
                 }
                 // If a stream session for any harness died, drop its id so
                 // the next turn cold-starts a fresh one instead of
-                // forwarding to a dead pipe.
+                // forwarding to a dead pipe. Also drop its JSON buffer
+                // (partial lines from before the exit are stale now).
                 self.harness_stream_session_ids
                     .retain(|_, id| id != &event.session_id);
+                self.stream_json_buffers.remove(&event.session_id);
                 self.agent_output_mode = AgentOutputMode::Unknown;
                 self.push_system_message(&format!("Session {status}."));
             }
@@ -1412,6 +1425,7 @@ impl App {
                 }
                 self.harness_stream_session_ids
                     .retain(|_, id| id != &event.session_id);
+                self.stream_json_buffers.remove(&event.session_id);
                 self.agent_output_mode = AgentOutputMode::Unknown;
                 self.push_system_message("Session kill recorded.");
             }
@@ -2796,6 +2810,65 @@ mod tests {
                 .iter()
                 .any(|m| m.content.contains("warning: auth token expiring soon")),
             "stream-json stderr envelope must surface as a system message in the transcript"
+        );
+    }
+
+    #[test]
+    fn stream_session_exit_event_also_drops_the_per_session_json_buffer() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "hi".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let session_id = app.active_session_id().expect("first launch").to_string();
+
+        // Feed a partial JSON line so the buffer has content to leak.
+        app.push_event_message(&output_event(
+            1,
+            &session_id,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"par"#,
+        ));
+        assert!(
+            app.stream_json_buffers.contains_key(&session_id),
+            "partial line must be buffered"
+        );
+
+        app.push_event_message(&EventRecord {
+            seq: 2,
+            id: "event-exit".to_string(),
+            session_id: session_id.clone(),
+            kind: "exit".to_string(),
+            payload_json: serde_json::json!({ "status": "completed" }).to_string(),
+            created_at: "2026-05-19T00:00:00Z".to_string(),
+        });
+        assert!(
+            !app.stream_json_buffers.contains_key(&session_id),
+            "exit must drop the per-session JSON buffer so it doesn't leak across the chat"
+        );
+    }
+
+    #[test]
+    fn clear_transcript_drops_stream_json_buffers_too() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "hi".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let session_id = app.active_session_id().expect("first launch").to_string();
+
+        app.push_event_message(&output_event(
+            1,
+            &session_id,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"par"#,
+        ));
+        assert!(app.stream_json_buffers.contains_key(&session_id));
+
+        app.clear_transcript();
+        assert!(
+            !app.stream_json_buffers.contains_key(&session_id),
+            "/clear must drop per-session JSON buffers along with the stream session ids"
         );
     }
 
