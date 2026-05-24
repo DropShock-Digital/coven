@@ -121,6 +121,15 @@ pub(super) struct App {
     /// Harness id of `active_session_id`. Used to decide whether output from
     /// the active session is worth scanning for a codex session-id banner.
     active_session_harness: Option<String>,
+    /// Most recent user prompt the chat sent through `run_harness_prompt`,
+    /// stashed so stale-id recovery can auto-resend it with no hint instead
+    /// of asking the user to retype.
+    last_chat_prompt: Option<String>,
+    /// True if we've already auto-retried once during the current user turn.
+    /// Reset by `handle_input` so a fresh user message gets a fresh retry
+    /// budget; prevents an infinite loop if the retry itself somehow hits
+    /// stale-detection too.
+    auto_retry_consumed: bool,
     client: Box<dyn ChatClient>,
 }
 
@@ -274,6 +283,8 @@ impl App {
             project_root,
             chat_owns_active_session: false,
             active_session_harness: None,
+            last_chat_prompt: None,
+            auto_retry_consumed: false,
             client,
         };
 
@@ -431,6 +442,8 @@ impl App {
         }
 
         self.event_poll_paused_for_api_mismatch = false;
+        // Each user message gets a fresh auto-retry budget.
+        self.auto_retry_consumed = false;
 
         if self.pending_cast_confirmation.is_some() {
             let result = self.resolve_pending_cast_confirmation(&raw);
@@ -808,6 +821,9 @@ impl App {
     fn run_harness_prompt(&mut self, harness: &str, prompt: &str) -> Option<store::SessionRecord> {
         self.is_responding = true;
         self.agent_output_mode = AgentOutputMode::Unknown;
+        // Stash the prompt so stale-id recovery can auto-resend it without
+        // making the user retype.
+        self.last_chat_prompt = Some(prompt.to_string());
         let hint = self.conversation_hint_for_harness(harness);
         let result = LaunchRequest::for_current_dir(harness, prompt).map(|request| match hint {
             Some(hint) => request.with_conversation(hint),
@@ -1059,9 +1075,10 @@ impl App {
 
     /// If the harness rejected our `Resume` because the prior session no
     /// longer exists (claude or codex local store wiped, server-side
-    /// expiry, etc.), drop the stale id from memory and disk and tell the
-    /// user so they can retry with a fresh thread. Only fires for chat-owned
-    /// sessions where we actually had a stored id to send.
+    /// expiry, etc.), drop the stale id from memory and disk and either
+    /// auto-resend the original prompt (preferred) or tell the user to
+    /// retype if we've already auto-retried this turn. Only fires for
+    /// chat-owned sessions where we actually had a stored id to send.
     fn maybe_clear_stale_conversation_id(&mut self, data: &str) {
         if !self.chat_owns_active_session {
             return;
@@ -1077,9 +1094,29 @@ impl App {
         }
         self.harness_conversation_ids.remove(&harness);
         self.persist_conversations();
-        self.push_system_message(&format!(
-            "Prior {harness} conversation no longer exists. Send your message again to start a fresh one."
-        ));
+
+        // Try to auto-resend so the user doesn't have to retype. Skip if
+        // we've already retried this turn (defense against a retry that
+        // itself trips the stale phrase — natural flow won't, since a
+        // post-drop turn sends no Resume, but be defensive anyway).
+        let prompt = self
+            .last_chat_prompt
+            .clone()
+            .filter(|_| !self.auto_retry_consumed);
+        match prompt {
+            Some(prompt) => {
+                self.push_system_message(&format!(
+                    "Prior {harness} conversation no longer exists. Starting a new one and re-sending your message."
+                ));
+                self.auto_retry_consumed = true;
+                self.run_harness_prompt(&harness, &prompt);
+            }
+            None => {
+                self.push_system_message(&format!(
+                    "Prior {harness} conversation no longer exists. Send your message again to start a fresh one."
+                ));
+            }
+        }
     }
 
     fn push_event_message(&mut self, event: &store::EventRecord) {
@@ -2309,7 +2346,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_claude_resume_drops_id_from_memory_and_disk_and_warns_user() {
+    fn stale_claude_resume_replaces_id_and_auto_resends_original_prompt() {
         let coven_home = tempfile::tempdir().unwrap();
         let project_root = tempfile::tempdir().unwrap();
         let stored_id = "fab1efac-1234-5678-9abc-def012345678";
@@ -2319,7 +2356,8 @@ mod tests {
             .expect("seed persisted state");
 
         let client = RecordingChatClient::default();
-        let (mut app, _) = app_with_persistence(client, coven_home.path(), project_root.path());
+        let (mut app, mirror) =
+            app_with_persistence(client, coven_home.path(), project_root.path());
         app.active_agent = Some(1); // claude
         app.input = "hello again".to_string();
         app.cursor_pos = app.input.len();
@@ -2330,23 +2368,92 @@ mod tests {
         app.push_event_message(&output_event(
             1,
             &session_id,
-            &format!(
-                "No conversation found with session ID: {stored_id}\n",
-            ),
+            &format!("No conversation found with session ID: {stored_id}\n"),
         ));
 
-        assert!(
-            !app.harness_conversation_ids.contains_key("claude"),
-            "stale id must be dropped from memory"
-        );
+        // Stale id must be gone — but auto-retry should have created a
+        // fresh one in its place (claude pre-assigns via --session-id).
+        let new_id = app
+            .harness_conversation_ids
+            .get("claude")
+            .cloned()
+            .expect("auto-retry should have stored a fresh claude id");
+        assert_ne!(new_id, stored_id, "fresh id must not equal the stale one");
         let stored = persistence::load_for_project(coven_home.path(), project_root.path());
+        assert_eq!(
+            stored.get("claude").cloned(),
+            Some(new_id.clone()),
+            "fresh id must be persisted to disk"
+        );
+
+        // Two launches: the original (Resume with stale id) and the auto-
+        // retry (Init with the fresh id, carrying the same prompt).
+        let launched = mirror.launched.borrow();
+        assert_eq!(launched.len(), 2);
+        assert_eq!(launched[0].prompt, "hello again");
+        assert_eq!(launched[1].prompt, "hello again");
+        match &launched[1].conversation {
+            Some(crate::harness::ConversationHint::Init { id }) => {
+                assert_eq!(id, &new_id);
+            }
+            other => panic!("auto-retry should carry Init with the new id, got {other:?}"),
+        }
         assert!(
-            !stored.contains_key("claude"),
-            "stale id must also be removed from disk"
+            app.messages
+                .iter()
+                .any(|m| m.content.contains("re-sending your message")),
+            "user must see a system message about the auto-retry"
+        );
+    }
+
+    #[test]
+    fn stale_recovery_only_auto_retries_once_per_user_turn() {
+        let coven_home = tempfile::tempdir().unwrap();
+        let project_root = tempfile::tempdir().unwrap();
+        let stored_id = "fab1efac-1234-5678-9abc-def012345678";
+        let mut seed = std::collections::HashMap::new();
+        seed.insert("claude".to_string(), stored_id.to_string());
+        persistence::save_for_project(coven_home.path(), project_root.path(), &seed)
+            .expect("seed persisted state");
+
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) =
+            app_with_persistence(client, coven_home.path(), project_root.path());
+        app.active_agent = Some(1); // claude
+        app.input = "hello".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let first_session = app.active_session_id().expect("first launch").to_string();
+
+        // First stale event → consumes the auto-retry budget.
+        app.push_event_message(&output_event(
+            1,
+            &first_session,
+            &format!("No conversation found with session ID: {stored_id}\n"),
+        ));
+        let after_first_retry = mirror.launched.borrow().len();
+        assert_eq!(after_first_retry, 2, "first stale event triggers a retry");
+        let retry_session = app.active_session_id().expect("retry sets id").to_string();
+        let retry_id = app.harness_conversation_ids.get("claude").cloned().unwrap();
+
+        // Simulate the retry itself also somehow hitting stale (pathological
+        // — claude wouldn't really say this for an Init session — but we
+        // guard against it to bound the loop).
+        app.push_event_message(&output_event(
+            2,
+            &retry_session,
+            &format!("No conversation found with session ID: {retry_id}\n"),
+        ));
+        assert_eq!(
+            mirror.launched.borrow().len(),
+            after_first_retry,
+            "second stale event in the same turn must not auto-retry again"
         );
         assert!(
-            app.messages.iter().any(|m| m.content.contains("no longer exists")),
-            "user must see a system message explaining the reset"
+            app.messages
+                .iter()
+                .any(|m| m.content.contains("Send your message again")),
+            "second stale event falls back to asking the user to retype"
         );
     }
 

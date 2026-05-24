@@ -98,16 +98,18 @@ CLI's own session API avoids both problems.
   separate entries of `harness_conversation_ids`. There's no cross-harness
   context transfer; switching agents effectively starts (or resumes) a
   parallel thread with the new agent.
-- **Stale ids** — auto-recovered. If the harness CLI rejects our `Resume`
-  because the prior session no longer exists (claude: `No conversation found
-  with session ID:`; codex: `no rollout found for thread id` /
-  `thread/resume failed`), the chat detects the message in the output
-  stream, drops the id from both memory and disk, and surfaces "Prior
-  <harness> conversation no longer exists. Send your message again to start
-  a fresh one." The next turn launches with no hint (claude) or no
-  `resume` arg (codex), creating a new conversation. Detection uses
-  output-text matching because both harnesses exit 0 on the stale-id
-  error.
+- **Stale ids** — auto-recovered with auto-retry. If the harness CLI rejects
+  our `Resume` because the prior session no longer exists (claude: `No
+  conversation found with session ID:`; codex: `no rollout found for thread
+  id` / `thread/resume failed`), the chat detects the message in the output
+  stream, drops the id from both memory and disk, and immediately re-sends
+  the user's original prompt with no resume hint. The user sees "Prior
+  <harness> conversation no longer exists. Starting a new one and
+  re-sending your message." then the reply from the fresh conversation.
+  Bounded to one auto-retry per user turn — a second stale event in the
+  same turn falls back to "Send your message again to start a fresh one."
+  so a degenerate loop can't pile up launches. Detection uses output-text
+  matching because both harnesses exit 0 on the stale-id error.
 - **`/attach`ed sessions.** Typing while attached to a session launched by
   `coven run` (not by chat) still forwards to that session's stdin — the
   resume path only applies to sessions chat itself launched.
@@ -162,22 +164,23 @@ CLI's own session API avoids both problems.
 
 ## Future work
 
-### Auto-retry after stale-id recovery
+### Hiding the raw stale-error chunk from the transcript
 
-Today stale-id detection drops the id and asks the user to send their
-message again. A nicer flow would auto-resend the original prompt with no
-hint so the chat appears seamless. Implementation sketch:
+When stale-recovery fires, the user briefly sees the raw harness error
+(e.g. `No conversation found with session ID: …`) rendered as an agent
+message right before the system message and auto-retry kick in. A polish
+would suppress that one chunk from the transcript so the flow reads:
+system message → new reply, with no scary error in between. Two
+approaches:
 
-1. Stash the last-sent prompt in `App` at launch time (e.g.
-   `last_sent_prompt: Option<String>`).
-2. On stale detection, after clearing the id, immediately re-invoke
-   `run_harness_prompt(harness, prompt)`.
-3. Guard against an infinite loop with a "retry-once" flag that resets
-   per user-typed message.
+- Return early from `push_event_message`'s output branch when stale is
+  detected, skipping the human-facing render for *that* chunk only.
+- Track `suppressed_session_ids: HashSet<String>` and skip all output +
+  exit events from the failed session id (handles the case where the
+  harness emits additional output before exiting).
 
-This wasn't worth the complexity for the first cut — the user-facing
-"Send your message again" line plus Up-arrow to recall the prior input
-is one keystroke + Enter.
+The second is more robust but adds a sweep of the event handler; the
+first is one-line.
 
 ### `/new` as a separate verb
 
