@@ -867,22 +867,37 @@ fn render_session_overlay(f: &mut Frame, app: &App, area: Rect) {
         )));
     } else {
         let entries = collapse_sessions_by_conversation(&app.sessions);
-        let active_conv = app.active_session_id().and_then(|active| {
+        // Compute the composite key of the chat's active session (same
+        // shape as `collapse_sessions_by_conversation` uses) so the
+        // active-marker matches the same grouping a colliding
+        // conversation_id across projects/harnesses can't trip.
+        let active_key: Option<(&str, &str, &str)> = app.active_session_id().and_then(|active| {
             app.sessions
                 .iter()
                 .find(|session| session.id == active)
-                .and_then(|session| session.conversation_id.as_deref())
+                .and_then(|session| {
+                    session.conversation_id.as_deref().map(|conv| {
+                        (
+                            session.project_root.as_str(),
+                            session.harness.as_str(),
+                            conv,
+                        )
+                    })
+                })
         });
         for entry in entries.iter().take(10) {
             let (rep, turn_count) = match entry {
                 SessionOverlayEntry::Group { rep, turn_count } => (*rep, *turn_count),
                 SessionOverlayEntry::Singleton { session } => (*session, 1),
             };
-            // A row is "active" if the chat's active_session_id belongs to
-            // it: either via shared conversation_id (group) or matching the
+            // A row is "active" if the chat's active_session_id belongs
+            // to it: either via shared composite `(project_root,
+            // harness, conversation_id)` key (group) or matching the
             // singleton's own id.
             let is_active = match rep.conversation_id.as_deref() {
-                Some(conv) => active_conv == Some(conv),
+                Some(conv) => {
+                    active_key == Some((rep.project_root.as_str(), rep.harness.as_str(), conv))
+                }
                 None => app.active_session_id() == Some(rep.id.as_str()),
             };
             let marker = if is_active { ">" } else { " " };
@@ -945,11 +960,20 @@ enum SessionOverlayEntry<'a> {
     },
 }
 
-/// Collapse sessions that share a `conversation_id` into a single entry per
+/// Collapse sessions that share a conversation into a single entry per
 /// conversation, keyed on the FIRST session encountered (callers pass
 /// daemon-listed sessions in `created_at DESC` order, so the first per
 /// conversation is the most recent turn). Sessions without a
 /// `conversation_id` pass through as singletons.
+///
+/// The grouping key is the composite `(project_root, harness,
+/// conversation_id)` rather than `conversation_id` alone. The chat
+/// generates UUIDs which won't realistically collide across projects
+/// or harnesses, but `conversation_id` is a caller-supplied opaque
+/// string — a buggy or malicious client could send the same value
+/// from two different projects (or two different harnesses in the
+/// same chat) and otherwise watch the overlay merge unrelated rows
+/// into a single entry. Composite key makes that misuse harmless.
 ///
 /// Runs in O(N) over `sessions` with two passes (counts + entries). Called
 /// from `render_session_overlay` per frame while the overlay is open, so
@@ -962,21 +986,31 @@ fn collapse_sessions_by_conversation(
     sessions: &[crate::store::SessionRecord],
 ) -> Vec<SessionOverlayEntry<'_>> {
     use std::collections::{HashMap, HashSet};
-    let mut counts: HashMap<&str, usize> = HashMap::new();
+    type GroupKey<'a> = (&'a str, &'a str, &'a str);
+    fn key_of(session: &crate::store::SessionRecord) -> Option<GroupKey<'_>> {
+        session.conversation_id.as_deref().map(|conv| {
+            (
+                session.project_root.as_str(),
+                session.harness.as_str(),
+                conv,
+            )
+        })
+    }
+    let mut counts: HashMap<GroupKey<'_>, usize> = HashMap::new();
     for session in sessions {
-        if let Some(conv) = session.conversation_id.as_deref() {
-            *counts.entry(conv).or_insert(0) += 1;
+        if let Some(key) = key_of(session) {
+            *counts.entry(key).or_insert(0) += 1;
         }
     }
-    let mut seen: HashSet<&str> = HashSet::new();
+    let mut seen: HashSet<GroupKey<'_>> = HashSet::new();
     let mut entries: Vec<SessionOverlayEntry<'_>> = Vec::new();
     for session in sessions {
-        match session.conversation_id.as_deref() {
-            Some(conv) => {
-                if seen.insert(conv) {
+        match key_of(session) {
+            Some(key) => {
+                if seen.insert(key) {
                     entries.push(SessionOverlayEntry::Group {
                         rep: session,
-                        turn_count: counts.get(conv).copied().unwrap_or(1),
+                        turn_count: counts.get(&key).copied().unwrap_or(1),
                     });
                 }
             }
@@ -1451,10 +1485,20 @@ mod tests {
         conversation: Option<&str>,
         title: &str,
     ) -> crate::store::SessionRecord {
+        make_session_in("/tmp/project", "claude", id, conversation, title)
+    }
+
+    fn make_session_in(
+        project_root: &str,
+        harness: &str,
+        id: &str,
+        conversation: Option<&str>,
+        title: &str,
+    ) -> crate::store::SessionRecord {
         crate::store::SessionRecord {
             id: id.to_string(),
-            project_root: "/tmp/project".to_string(),
-            harness: "claude".to_string(),
+            project_root: project_root.to_string(),
+            harness: harness.to_string(),
             title: title.to_string(),
             status: "completed".to_string(),
             exit_code: Some(0),
@@ -1524,6 +1568,75 @@ mod tests {
         }
         assert_eq!(badge(100), "99+t");
         assert_eq!(badge(7), " 7t ");
+    }
+
+    #[test]
+    fn collapse_sessions_keys_on_composite_project_and_harness_not_just_conversation_id() {
+        // Same conversation_id used by sessions in two different projects
+        // (a pathological / buggy-client scenario). The collapse must
+        // NOT merge them — otherwise a malicious or sloppy client could
+        // make an unrelated project's chat history appear inside the
+        // current project's overlay.
+        let sessions = vec![
+            make_session_in(
+                "/proj/A",
+                "claude",
+                "a-1",
+                Some("shared-id"),
+                "A chat reply",
+            ),
+            make_session_in(
+                "/proj/B",
+                "claude",
+                "b-1",
+                Some("shared-id"),
+                "B chat reply",
+            ),
+        ];
+        let entries = collapse_sessions_by_conversation(&sessions);
+        assert_eq!(
+            entries.len(),
+            2,
+            "same conversation_id under different project_root must NOT merge: got {entries:?}",
+            entries = entries
+                .iter()
+                .map(|e| match e {
+                    SessionOverlayEntry::Group { rep, turn_count } =>
+                        format!("Group({}, {})", rep.id, turn_count),
+                    SessionOverlayEntry::Singleton { session } =>
+                        format!("Singleton({})", session.id),
+                })
+                .collect::<Vec<_>>()
+        );
+        for entry in &entries {
+            match entry {
+                SessionOverlayEntry::Group { turn_count, .. } => assert_eq!(*turn_count, 1),
+                SessionOverlayEntry::Singleton { .. } => {}
+            }
+        }
+    }
+
+    #[test]
+    fn collapse_sessions_keys_on_harness_not_just_conversation_id() {
+        // Same project, same conversation_id, different harness — should
+        // also stay separate (defends against a client that reuses
+        // ledger ids across harnesses).
+        let sessions = vec![
+            make_session_in(
+                "/proj/X",
+                "claude",
+                "c-1",
+                Some("shared-id"),
+                "claude reply",
+            ),
+            make_session_in("/proj/X", "codex", "k-1", Some("shared-id"), "codex reply"),
+        ];
+        let entries = collapse_sessions_by_conversation(&sessions);
+        assert_eq!(
+            entries.len(),
+            2,
+            "same conversation_id under different harness must NOT merge"
+        );
     }
 
     #[test]
