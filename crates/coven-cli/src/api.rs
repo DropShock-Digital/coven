@@ -313,6 +313,19 @@ fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
         .context("failed to resolve projectRoot")?;
     let canonical_cwd = project::resolve_inside_root(&canonical_project_root, cwd.map(Path::new))?;
     let harness = required_string(&payload, "harness")?;
+    // Validate against the supported harness set up-front (client error)
+    // instead of letting the runtime's arg builder surface it later as a
+    // 500. Bonus: rejecting here means we never insert a session row for
+    // a launch that can't possibly succeed.
+    let supported: Vec<&'static str> = crate::harness::built_in_harness_specs()
+        .into_iter()
+        .map(|spec| spec.id)
+        .collect();
+    if !supported.iter().any(|id| *id == harness) {
+        anyhow::bail!(
+            "harness `{harness}` is not a supported harness; expected one of {supported:?}"
+        );
+    }
     let launch_mode = launch_mode_from_payload(&payload)?;
     let prompt = required_string(&payload, "prompt")?;
     let title = payload
@@ -426,6 +439,16 @@ fn record_input(
             );
         }
     };
+    // Validate `data` shape here (client error) instead of letting the
+    // runtime surface it as a 500. Required field, must be a string.
+    if !payload.get("data").map(|v| v.is_string()).unwrap_or(false) {
+        return api_error(
+            400,
+            "invalid_request",
+            "input payload requires string field `data`",
+            Some(json!({ "sessionId": session_id })),
+        );
+    }
     if let Err(error) = runtime.send_input(session_id, &payload) {
         if error.to_string().contains("not live") {
             return session_not_live_response(session_id);
@@ -1256,6 +1279,99 @@ mod tests {
         assert_eq!(
             runtime.inputs.borrow().as_slice(),
             &["session-1:hello coven"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn launch_request_with_unknown_harness_returns_400_upfront_no_session_row() -> anyhow::Result<()>
+    {
+        let temp_dir = tempfile::tempdir()?;
+        let project_root = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&project_root)?;
+        let runtime = RecordingRuntime::default();
+        let body = json!({
+            "projectRoot": project_root,
+            "harness": "hermes",
+            "launchMode": "nonInteractive",
+            "prompt": "hello"
+        })
+        .to_string();
+
+        let response = handle_request_with_runtime(
+            "POST",
+            "/sessions",
+            temp_dir.path(),
+            None,
+            Some(&body),
+            &runtime,
+        )?;
+
+        assert_eq!(response.status, 400);
+        assert!(
+            response.body.contains("not a supported harness"),
+            "expected supported-harness validation message, got: {}",
+            response.body
+        );
+        assert!(
+            runtime.launches.borrow().is_empty(),
+            "runtime must not be invoked for an unsupported harness"
+        );
+        // And no session row should have been inserted.
+        let sessions = handle_request("GET", "/sessions", temp_dir.path(), None)?;
+        assert!(
+            sessions.body.contains("[]"),
+            "no session row should exist after a 400-rejected launch, got: {}",
+            sessions.body
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn input_request_with_missing_data_field_returns_400_not_500() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        insert_test_session(temp_dir.path(), "session-1")?;
+
+        let response = handle_request_with_body(
+            "POST",
+            "/sessions/session-1/input",
+            temp_dir.path(),
+            None,
+            Some(r#"{"foo":"bar"}"#),
+        )?;
+
+        assert_eq!(response.status, 400);
+        assert!(
+            response.body.contains("invalid_request"),
+            "missing `data` is a client error, expected 400 invalid_request, got: {}",
+            response.body
+        );
+        assert!(
+            response.body.contains("`data`"),
+            "expected the message to name the missing field, got: {}",
+            response.body
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn input_request_with_non_string_data_field_returns_400_not_500() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        insert_test_session(temp_dir.path(), "session-1")?;
+
+        let response = handle_request_with_body(
+            "POST",
+            "/sessions/session-1/input",
+            temp_dir.path(),
+            None,
+            Some(r#"{"data": 42}"#),
+        )?;
+
+        assert_eq!(response.status, 400);
+        assert!(
+            response.body.contains("invalid_request"),
+            "non-string `data` is a client error, expected 400 invalid_request, got: {}",
+            response.body
         );
         Ok(())
     }
