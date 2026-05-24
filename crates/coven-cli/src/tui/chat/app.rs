@@ -852,9 +852,21 @@ impl App {
         // making the user retype.
         self.last_chat_prompt = Some(prompt.to_string());
         let hint = self.conversation_hint_for_harness(harness);
-        let result = LaunchRequest::for_current_dir(harness, prompt).map(|request| match hint {
-            Some(hint) => request.with_conversation(hint),
-            None => request,
+        // Same map that holds the harness-CLI session id also serves as the
+        // ledger conversation id, so /sessions can collapse multi-turn
+        // threads. Codex's very first turn has no entry yet (we capture
+        // from output), so it lands as an ungrouped row — see
+        // `docs/chat-persistence.md`.
+        let conversation_id = self.harness_conversation_ids.get(harness).cloned();
+        let result = LaunchRequest::for_current_dir(harness, prompt).map(|request| {
+            let request = match hint {
+                Some(hint) => request.with_conversation(hint),
+                None => request,
+            };
+            match conversation_id {
+                Some(id) => request.with_conversation_id(id),
+                None => request,
+            }
         });
         let result = result.and_then(|request| self.client.launch_session(request));
         match result {
@@ -1988,6 +2000,7 @@ mod tests {
             archived_at: None,
             created_at: "2026-05-19T00:00:00Z".to_string(),
             updated_at: "2026-05-19T00:00:00Z".to_string(),
+            conversation_id: None,
         }
     }
 
@@ -2149,6 +2162,67 @@ mod tests {
             }
             other => panic!("expected Init after /clear, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn claude_chat_turn_carries_conversation_id_matching_the_init_uuid() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "hello".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+
+        let launched = mirror.launched.borrow();
+        let init_id = match &launched[0].conversation {
+            Some(crate::harness::ConversationHint::Init { id }) => id.clone(),
+            other => panic!("expected Init, got {other:?}"),
+        };
+        assert_eq!(
+            launched[0].conversation_id.as_deref(),
+            Some(init_id.as_str()),
+            "claude chat turns must carry conversation_id equal to the session uuid"
+        );
+    }
+
+    #[test]
+    fn codex_first_chat_turn_lands_without_conversation_id_then_subsequent_turns_carry_it() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(0); // codex
+        app.input = "first".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        // First codex launch: no captured id yet, no conversation_id either.
+        assert!(mirror.launched.borrow()[0].conversation_id.is_none());
+
+        let session_id = app.active_session_id().expect("first launch").to_string();
+        let captured = "019eaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+        app.push_event_message(&output_event(
+            1,
+            &session_id,
+            &format!("session id: {captured}\n"),
+        ));
+        app.push_event_message(&EventRecord {
+            seq: 2,
+            id: "event-2".to_string(),
+            session_id,
+            kind: "exit".to_string(),
+            payload_json: serde_json::json!({ "status": "completed" }).to_string(),
+            created_at: "2026-05-19T00:00:00Z".to_string(),
+        });
+
+        app.input = "follow up".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+
+        let launched = mirror.launched.borrow();
+        assert_eq!(launched.len(), 2);
+        assert_eq!(
+            launched[1].conversation_id.as_deref(),
+            Some(captured),
+            "second codex turn must carry the captured id as conversation_id"
+        );
     }
 
     #[test]

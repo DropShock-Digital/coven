@@ -69,6 +69,12 @@ pub struct SessionLaunch {
     pub prompt: String,
     pub title: String,
     pub conversation: Option<ConversationHint>,
+    /// Caller-supplied id used to group this session with other turns of the
+    /// same chat conversation in `/sessions`. Independent of the harness
+    /// CLI's own session-resume mechanism (see `ConversationHint`); the
+    /// chat layer typically passes a chat-generated UUID stable for the
+    /// lifetime of the conversation. `None` = ungrouped (one-off run).
+    pub conversation_id: Option<String>,
 }
 
 pub trait SessionRuntime {
@@ -265,6 +271,7 @@ fn launch_session(
         archived_at: None,
         created_at: now.clone(),
         updated_at: now,
+        conversation_id: launch.conversation_id.clone(),
     };
     store::insert_session(&conn, &record)?;
     if let Err(error) = runtime.launch_session(&launch) {
@@ -291,6 +298,12 @@ fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
         .to_string();
 
     let conversation = conversation_from_payload(&payload)?;
+    let conversation_id = payload
+        .get("conversationId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned);
 
     Ok(SessionLaunch {
         id: Uuid::new_v4().to_string(),
@@ -301,6 +314,7 @@ fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
         prompt,
         title,
         conversation,
+        conversation_id,
     })
 }
 
@@ -774,6 +788,7 @@ mod tests {
             archived_at: None,
             created_at: "2026-04-27T10:00:00Z".to_string(),
             updated_at: "2026-04-27T10:00:00Z".to_string(),
+            conversation_id: None,
         };
         crate::store::insert_session(&conn, &session)?;
 
@@ -939,6 +954,73 @@ mod tests {
                 id: "abc-123".to_string()
             })
         );
+        Ok(())
+    }
+
+    #[test]
+    fn launch_request_persists_conversation_id_on_the_session_row() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let project_root = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&project_root)?;
+        let runtime = RecordingRuntime::default();
+        let body = json!({
+            "projectRoot": project_root,
+            "harness": "claude",
+            "launchMode": "nonInteractive",
+            "prompt": "hi",
+            "conversation": {"mode": "init", "id": "abc-123"},
+            "conversationId": "abc-123"
+        })
+        .to_string();
+
+        handle_request_with_runtime(
+            "POST",
+            "/sessions",
+            temp_dir.path(),
+            None,
+            Some(&body),
+            &runtime,
+        )?;
+
+        assert_eq!(
+            runtime.launches.borrow()[0].conversation_id.as_deref(),
+            Some("abc-123")
+        );
+
+        // And it round-trips through the session list payload too.
+        let list = handle_request("GET", "/sessions", temp_dir.path(), None)?;
+        assert!(
+            list.body.contains(r#""conversation_id":"abc-123""#),
+            "list response should expose conversation_id, got: {}",
+            list.body
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn launch_request_treats_missing_conversation_id_as_null() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let project_root = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&project_root)?;
+        let runtime = RecordingRuntime::default();
+        let body = json!({
+            "projectRoot": project_root,
+            "harness": "claude",
+            "launchMode": "nonInteractive",
+            "prompt": "hi"
+        })
+        .to_string();
+
+        handle_request_with_runtime(
+            "POST",
+            "/sessions",
+            temp_dir.path(),
+            None,
+            Some(&body),
+            &runtime,
+        )?;
+
+        assert!(runtime.launches.borrow()[0].conversation_id.is_none());
         Ok(())
     }
 
@@ -1312,6 +1394,7 @@ mod tests {
             archived_at: None,
             created_at: "2026-04-27T10:00:00Z".to_string(),
             updated_at: "2026-04-27T10:00:00Z".to_string(),
+            conversation_id: None,
         };
         crate::store::insert_session(&conn, &session)?;
         Ok(())

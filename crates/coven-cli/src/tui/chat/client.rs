@@ -28,6 +28,13 @@ pub(crate) struct LaunchRequest {
     pub(crate) prompt: String,
     pub(crate) title: String,
     pub(crate) conversation: Option<harness::ConversationHint>,
+    /// Stable per-conversation id used to group multiple chat turns under
+    /// one row in `/sessions`. Distinct from `conversation` (which drives
+    /// the harness CLI's own resume args). Today chat uses the same uuid
+    /// for both fields on claude turns and a chat-generated uuid on codex
+    /// turns (since codex auto-assigns its own session id). See
+    /// `docs/chat-persistence.md`.
+    pub(crate) conversation_id: Option<String>,
 }
 
 impl LaunchRequest {
@@ -43,11 +50,17 @@ impl LaunchRequest {
             prompt: prompt.to_string(),
             title: session_title(prompt),
             conversation: None,
+            conversation_id: None,
         })
     }
 
     pub(crate) fn with_conversation(mut self, hint: harness::ConversationHint) -> Self {
         self.conversation = Some(hint);
+        self
+    }
+
+    pub(crate) fn with_conversation_id(mut self, id: String) -> Self {
+        self.conversation_id = Some(id);
         self
     }
 }
@@ -185,6 +198,11 @@ impl ChatClient for DaemonChatClient {
                 "conversation".to_string(),
                 json!({"mode": mode, "id": id}),
             );
+        }
+        if let Some(conversation_id) = request.conversation_id.as_ref() {
+            body.as_object_mut()
+                .expect("json! literal is an object")
+                .insert("conversationId".to_string(), json!(conversation_id));
         }
         self.request_json("POST", "/api/v1/sessions", Some(body))
     }
