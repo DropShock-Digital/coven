@@ -652,8 +652,7 @@ fn daemon_status_from_health_socket(socket: &str) -> Result<Option<DaemonStatus>
 
 #[cfg(unix)]
 pub fn bind_api_socket(coven_home: &Path) -> Result<UnixListener> {
-    std::fs::create_dir_all(coven_home)
-        .with_context(|| format!("failed to create Coven home {}", coven_home.display()))?;
+    ensure_private_coven_home(coven_home)?;
     let socket_path = daemon_socket_path(coven_home);
     if socket_path.exists() {
         std::fs::remove_file(&socket_path)
@@ -933,6 +932,7 @@ mod tests {
     #[test]
     fn write_status_and_socket_use_owner_only_permissions() -> Result<()> {
         let temp_dir = tempfile::tempdir()?;
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o755))?;
         let status = DaemonStatus {
             pid: 12345,
             started_at: "2026-04-27T10:00:00Z".to_string(),
@@ -950,6 +950,25 @@ mod tests {
 
         let listener = bind_api_socket(temp_dir.path())?;
         assert!(daemon_socket_path(temp_dir.path()).exists());
+        let socket_mode = std::fs::metadata(daemon_socket_path(temp_dir.path()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(socket_mode, 0o600);
+        drop(listener);
+
+        let home_mode = std::fs::metadata(temp_dir.path())?.permissions().mode() & 0o777;
+        assert_eq!(home_mode, 0o700);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bind_api_socket_hardens_coven_home_permissions() -> Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        std::fs::set_permissions(temp_dir.path(), std::fs::Permissions::from_mode(0o755))?;
+
+        let listener = bind_api_socket(temp_dir.path())?;
         drop(listener);
 
         let home_mode = std::fs::metadata(temp_dir.path())?.permissions().mode() & 0o777;
