@@ -1382,14 +1382,25 @@ impl App {
                     // {"type":"system","subtype":"stderr","text":...} so
                     // chat surfaces auth/setup errors instead of dropping
                     // them. Other system subtypes (init, etc.) stay silent.
+                    //
+                    // The stderr text comes from a subprocess we don't
+                    // control — it can contain ANSI escapes or other
+                    // control codes that would corrupt the TUI render.
+                    // Run it through `clean_terminal_output` to strip
+                    // those before pushing to the transcript.
                     let subtype = value
                         .get("subtype")
                         .and_then(serde_json::Value::as_str)
                         .unwrap_or("");
                     if subtype == "stderr" {
                         if let Some(text) = value.get("text").and_then(serde_json::Value::as_str) {
-                            if !text.is_empty() {
-                                self.push_system_message(&format!("[{sender} stderr] {text}"));
+                            if let Some(safe) = clean_terminal_output(text) {
+                                let trimmed = safe.trim_end_matches('\n');
+                                if !trimmed.is_empty() {
+                                    self.push_system_message(&format!(
+                                        "[{sender} stderr] {trimmed}"
+                                    ));
+                                }
                             }
                         }
                     }

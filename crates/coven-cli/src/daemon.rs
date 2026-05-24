@@ -70,10 +70,16 @@ enum LiveSessionKind {
     Stream,
 }
 
+/// Registered live session. `input` and `killer` each sit behind their own
+/// `Arc<Mutex<…>>` so `send_input` and `kill_session` can drop the global
+/// `sessions` map lock before doing any potentially-blocking I/O (a
+/// stream-mode harness whose child has stopped reading stdin will block
+/// the write; we don't want that to wedge every other session op,
+/// including a concurrent `/kill` to recover).
 struct LiveSessionHandle {
     kind: LiveSessionKind,
-    input: Box<dyn Write + Send>,
-    killer: Box<dyn RuntimeKiller>,
+    input: std::sync::Arc<Mutex<Box<dyn Write + Send>>>,
+    killer: std::sync::Arc<Mutex<Box<dyn RuntimeKiller>>>,
 }
 
 impl LiveSessionRuntime {
@@ -101,6 +107,7 @@ impl LiveSessionRuntime {
         input: Box<dyn Write + Send>,
         killer: Box<dyn RuntimeKiller>,
     ) -> Result<()> {
+        use std::sync::Arc;
         self.sessions
             .lock()
             .map_err(|_| anyhow::anyhow!("live session registry lock poisoned"))?
@@ -108,8 +115,8 @@ impl LiveSessionRuntime {
                 session_id,
                 LiveSessionHandle {
                     kind,
-                    input,
-                    killer,
+                    input: Arc::new(Mutex::new(input)),
+                    killer: Arc::new(Mutex::new(killer)),
                 },
             );
         Ok(())
@@ -144,7 +151,7 @@ impl SessionRuntime for LiveSessionRuntime {
                 );
             }
             let piped = pty_runner::spawn_piped_with_observer(&command, observer)?;
-            let mut killer: Box<dyn RuntimeKiller> = Box::new(PipedKiller { pid: piped.pid });
+            let mut killer_box: Box<dyn RuntimeKiller> = Box::new(PipedKiller { pid: piped.pid });
             let mut input = piped.input;
             // Send the launch's prompt as the first stream-json user
             // message so the chat doesn't need a separate send call right
@@ -155,7 +162,7 @@ impl SessionRuntime for LiveSessionRuntime {
             // pretending we delivered the prompt.
             if !launch.prompt.is_empty() {
                 if let Err(error) = write_stream_message(input.as_mut(), &launch.prompt) {
-                    let _ = killer.kill();
+                    let _ = killer_box.kill();
                     return Err(error).with_context(|| {
                         format!(
                             "stream-mode launch of `{}` failed: child closed stdin before the initial message landed (auth/setup error?)",
@@ -164,7 +171,12 @@ impl SessionRuntime for LiveSessionRuntime {
                     });
                 }
             }
-            return self.register_kind(launch.id.clone(), LiveSessionKind::Stream, input, killer);
+            return self.register_kind(
+                launch.id.clone(),
+                LiveSessionKind::Stream,
+                input,
+                killer_box,
+            );
         }
 
         let detached = pty_runner::spawn_detached_with_observer(&command, observer)?;
@@ -181,40 +193,60 @@ impl SessionRuntime for LiveSessionRuntime {
             .get("data")
             .and_then(Value::as_str)
             .context("input payload requires string field `data`")?;
-        let mut sessions = self
-            .sessions
+        // Look up the per-session input writer under the map lock, then
+        // drop the map lock BEFORE blocking on the actual write. A
+        // stream-mode child that's stopped reading stdin can stall the
+        // write indefinitely; holding the global map lock during that
+        // would wedge every other session op (including a concurrent
+        // /kill that wants to recover from exactly this state).
+        let (kind, input) = {
+            let sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| anyhow::anyhow!("live session registry lock poisoned"))?;
+            let session = sessions
+                .get(session_id)
+                .with_context(|| format!("session `{session_id}` is not live in this daemon"))?;
+            (session.kind, std::sync::Arc::clone(&session.input))
+        };
+        let mut input = input
             .lock()
-            .map_err(|_| anyhow::anyhow!("live session registry lock poisoned"))?;
-        let session = sessions
-            .get_mut(session_id)
-            .with_context(|| format!("session `{session_id}` is not live in this daemon"))?;
-        match session.kind {
+            .map_err(|_| anyhow::anyhow!("live session input lock poisoned"))?;
+        match kind {
             LiveSessionKind::Pty => {
-                session
-                    .input
+                input
                     .write_all(data.as_bytes())
                     .context("failed to write input to live session")?;
-                session
-                    .input
+                input
                     .flush()
                     .context("failed to flush live session input")?;
             }
             LiveSessionKind::Stream => {
-                write_stream_message(session.input.as_mut(), data)?;
+                write_stream_message(input.as_mut(), data)?;
             }
         }
         Ok(())
     }
 
     fn kill_session(&self, session_id: &str) -> Result<()> {
-        let mut sessions = self
-            .sessions
+        // Remove the handle under the map lock, then drop the map lock
+        // before doing the actual kill. The killer is in its own
+        // `Arc<Mutex>` so a concurrent `send_input` that's blocked on a
+        // hung write can't prevent us from issuing the kill.
+        let handle = {
+            let mut sessions = self
+                .sessions
+                .lock()
+                .map_err(|_| anyhow::anyhow!("live session registry lock poisoned"))?;
+            sessions
+                .remove(session_id)
+                .with_context(|| format!("session `{session_id}` is not live in this daemon"))?
+        };
+        let mut killer = handle
+            .killer
             .lock()
-            .map_err(|_| anyhow::anyhow!("live session registry lock poisoned"))?;
-        let mut session = sessions
-            .remove(session_id)
-            .with_context(|| format!("session `{session_id}` is not live in this daemon"))?;
-        session.killer.kill()
+            .map_err(|_| anyhow::anyhow!("live session killer lock poisoned"))?;
+        killer.kill()
     }
 }
 
@@ -1052,6 +1084,79 @@ mod tests {
             *self.killed.lock().unwrap() = true;
             Ok(())
         }
+    }
+
+    /// `Write` impl whose `write` blocks until a kill signal is set.
+    /// Used to simulate a stream-mode child that has stopped reading
+    /// stdin — we want `kill_session` to succeed even while
+    /// `send_input` is mid-write to that exact session.
+    #[derive(Clone)]
+    struct BlockingWriter {
+        unblock: std::sync::Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl Write for BlockingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let (lock, cvar) = &*self.unblock;
+            let mut guard = lock.lock().unwrap();
+            while !*guard {
+                guard = cvar.wait(guard).unwrap();
+            }
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn kill_session_succeeds_even_while_send_input_is_blocked_on_a_hung_child() {
+        use std::sync::{Arc, Condvar, Mutex as StdMutex};
+        use std::thread;
+
+        let runtime = Arc::new(LiveSessionRuntime::default());
+        let unblock = Arc::new((StdMutex::new(false), Condvar::new()));
+        let writer = BlockingWriter {
+            unblock: Arc::clone(&unblock),
+        };
+        let killed = Arc::new(StdMutex::new(false));
+        runtime
+            .register(
+                "wedged-session".to_string(),
+                Box::new(writer),
+                Box::new(RecordingKiller {
+                    killed: killed.clone(),
+                }),
+            )
+            .unwrap();
+
+        // Kick off a send that will block on the writer.
+        let sender_runtime = Arc::clone(&runtime);
+        let sender = thread::spawn(move || {
+            SessionRuntime::send_input(
+                &*sender_runtime,
+                "wedged-session",
+                &serde_json::json!({ "data": "wedge" }),
+            )
+        });
+
+        // Give the sender a moment to take the input lock + block.
+        thread::sleep(std::time::Duration::from_millis(50));
+
+        // Kill must succeed regardless of the wedged send.
+        SessionRuntime::kill_session(&*runtime, "wedged-session")
+            .expect("kill_session must not be blocked by a hung send_input on the same session");
+        assert!(*killed.lock().unwrap());
+
+        // Let the writer unblock so the sender thread can finish (its
+        // post-kill state isn't what we're testing).
+        {
+            let (lock, cvar) = &*unblock;
+            *lock.lock().unwrap() = true;
+            cvar.notify_all();
+        }
+        let _ = sender.join();
     }
 
     #[test]
