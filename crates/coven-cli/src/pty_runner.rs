@@ -1,5 +1,6 @@
-use std::io::{self, IsTerminal, Read, Write};
+use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::thread;
 
 use anyhow::{Context, Result};
@@ -90,6 +91,116 @@ pub fn run_attached(command: &HarnessCommand) -> Result<PtyRunResult> {
 #[allow(dead_code)]
 pub fn spawn_detached(command: &HarnessCommand) -> Result<DetachedPtySession> {
     spawn_detached_with_observer(command, None)
+}
+
+/// Handle returned by `spawn_piped_with_observer`. The child is wrapped in
+/// an `Arc<Mutex<Option<...>>>` so the drain thread can take it for `wait`
+/// while the daemon's killer holds a separate clone for `kill`.
+pub struct PipedSession {
+    pub input: Box<dyn Write + Send>,
+    pub child: std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>,
+}
+
+/// Spawn `command` as a plain piped child process (no PTY) and stream its
+/// stdout to `observer`. Used by stream-mode harness launches where the
+/// child reads newline-delimited JSON from stdin and writes
+/// newline-delimited JSON to stdout — wrapping in a PTY would add ANSI
+/// escapes the child wouldn't otherwise emit. Lifecycle mirrors
+/// `spawn_detached_with_observer`: a background thread drains stdout and
+/// fires `on_exit` when the child finishes.
+pub fn spawn_piped_with_observer(
+    command: &HarnessCommand,
+    observer: Option<DetachedPtyObserver>,
+) -> Result<PipedSession> {
+    use std::process::Command as StdCommand;
+    use std::sync::{Arc, Mutex as StdMutex};
+
+    let mut std_command = StdCommand::new(&command.program);
+    std_command.args(&command.args);
+    std_command.current_dir(&command.cwd);
+    std_command.stdin(Stdio::piped());
+    std_command.stdout(Stdio::piped());
+    std_command.stderr(Stdio::piped());
+
+    let mut child = std_command
+        .spawn()
+        .with_context(|| format!("failed to spawn harness `{}` in piped mode", command.program))?;
+
+    let stdin = child
+        .stdin
+        .take()
+        .context("failed to take child stdin in piped mode")?;
+    let stdout = child
+        .stdout
+        .take()
+        .context("failed to take child stdout in piped mode")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("failed to take child stderr in piped mode")?;
+
+    // Drain stderr to keep the buffer from filling and the child from
+    // blocking. Stream-json harnesses surface auth/setup errors there.
+    thread::spawn(move || {
+        let reader = BufReader::new(stderr);
+        for line in reader.lines().flatten() {
+            eprintln!("[stream-stderr] {line}");
+        }
+    });
+
+    let shared_child = Arc::new(StdMutex::new(Some(child)));
+    let shared_for_wait = Arc::clone(&shared_child);
+    thread::spawn(move || {
+        let mut reader = stdout;
+        let mut observer = observer;
+        drain_detached_output(
+            &mut reader,
+            observer.as_mut().map(|observer| &mut observer.on_output),
+        );
+        let result = wait_for_piped_child(&shared_for_wait);
+        if let Some(observer) = observer {
+            (observer.on_exit)(result);
+        }
+    });
+
+    Ok(PipedSession {
+        input: Box::new(stdin),
+        child: shared_child,
+    })
+}
+
+fn wait_for_piped_child(
+    child: &std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>,
+) -> PtyRunResult {
+    let mut guard = match child.lock() {
+        Ok(guard) => guard,
+        Err(_) => {
+            return PtyRunResult {
+                status: "failed",
+                exit_code: None,
+            };
+        }
+    };
+    let Some(child) = guard.as_mut() else {
+        return PtyRunResult {
+            status: "completed",
+            exit_code: None,
+        };
+    };
+    match child.wait() {
+        Ok(status) => {
+            let exit_code = status.code();
+            let status_label = if status.success() { "completed" } else { "failed" };
+            PtyRunResult {
+                status: status_label,
+                exit_code,
+            }
+        }
+        Err(_) => PtyRunResult {
+            status: "failed",
+            exit_code: None,
+        },
+    }
 }
 
 pub fn spawn_detached_with_observer(

@@ -185,6 +185,7 @@ impl ChatClient for DaemonChatClient {
             "launchMode": match request.launch_mode {
                 harness::HarnessLaunchMode::Interactive => "interactive",
                 harness::HarnessLaunchMode::NonInteractive => "nonInteractive",
+                harness::HarnessLaunchMode::Stream => "stream",
             },
             "prompt": request.prompt,
             "title": request.title,

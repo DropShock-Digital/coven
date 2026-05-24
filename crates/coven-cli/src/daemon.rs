@@ -59,7 +59,19 @@ pub struct LiveSessionRuntime {
     sessions: Mutex<HashMap<String, LiveSessionHandle>>,
 }
 
+/// What kind of underlying process is bound to a registered live session.
+/// PTY sessions take raw text on stdin (we forward `payload.data` as bytes).
+/// Stream sessions take newline-delimited JSON; `payload.data` gets wrapped
+/// in a `{"type":"user","message":{"role":"user","content":[{...}]}}` envelope
+/// before being written to the child. See `docs/chat-persistence.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LiveSessionKind {
+    Pty,
+    Stream,
+}
+
 struct LiveSessionHandle {
+    kind: LiveSessionKind,
     input: Box<dyn Write + Send>,
     killer: Box<dyn RuntimeKiller>,
 }
@@ -79,10 +91,27 @@ impl LiveSessionRuntime {
         input: Box<dyn Write + Send>,
         killer: Box<dyn RuntimeKiller>,
     ) -> Result<()> {
+        self.register_kind(session_id, LiveSessionKind::Pty, input, killer)
+    }
+
+    fn register_kind(
+        &self,
+        session_id: String,
+        kind: LiveSessionKind,
+        input: Box<dyn Write + Send>,
+        killer: Box<dyn RuntimeKiller>,
+    ) -> Result<()> {
         self.sessions
             .lock()
             .map_err(|_| anyhow::anyhow!("live session registry lock poisoned"))?
-            .insert(session_id, LiveSessionHandle { input, killer });
+            .insert(
+                session_id,
+                LiveSessionHandle {
+                    kind,
+                    input,
+                    killer,
+                },
+            );
         Ok(())
     }
 }
@@ -100,8 +129,37 @@ impl SessionRuntime for LiveSessionRuntime {
             .coven_home
             .as_ref()
             .map(|coven_home| output_observer(coven_home.to_path_buf(), launch.id.clone()));
+
+        if launch.launch_mode == crate::harness::HarnessLaunchMode::Stream {
+            let piped = pty_runner::spawn_piped_with_observer(&command, observer)?;
+            let killer: Box<dyn RuntimeKiller> = Box::new(PipedKiller {
+                child: piped.child,
+            });
+            let mut input = piped.input;
+            // Send the launch's prompt as the first stream-json user
+            // message so the chat doesn't need a separate send call right
+            // after launch. Best-effort: if the write fails the session is
+            // still registered and the caller can retry via send_input.
+            if !launch.prompt.is_empty() {
+                if let Err(error) = write_stream_message(input.as_mut(), &launch.prompt) {
+                    eprintln!("[stream-launch] initial message write failed: {error}");
+                }
+            }
+            return self.register_kind(
+                launch.id.clone(),
+                LiveSessionKind::Stream,
+                input,
+                killer,
+            );
+        }
+
         let detached = pty_runner::spawn_detached_with_observer(&command, observer)?;
-        self.register(launch.id.clone(), detached.input, Box::new(detached.killer))
+        self.register_kind(
+            launch.id.clone(),
+            LiveSessionKind::Pty,
+            detached.input,
+            Box::new(detached.killer),
+        )
     }
 
     fn send_input(&self, session_id: &str, payload: &Value) -> Result<()> {
@@ -116,14 +174,21 @@ impl SessionRuntime for LiveSessionRuntime {
         let session = sessions
             .get_mut(session_id)
             .with_context(|| format!("session `{session_id}` is not live in this daemon"))?;
-        session
-            .input
-            .write_all(data.as_bytes())
-            .context("failed to write input to live session")?;
-        session
-            .input
-            .flush()
-            .context("failed to flush live session input")?;
+        match session.kind {
+            LiveSessionKind::Pty => {
+                session
+                    .input
+                    .write_all(data.as_bytes())
+                    .context("failed to write input to live session")?;
+                session
+                    .input
+                    .flush()
+                    .context("failed to flush live session input")?;
+            }
+            LiveSessionKind::Stream => {
+                write_stream_message(session.input.as_mut(), data)?;
+            }
+        }
         Ok(())
     }
 
@@ -136,6 +201,53 @@ impl SessionRuntime for LiveSessionRuntime {
             .remove(session_id)
             .with_context(|| format!("session `{session_id}` is not live in this daemon"))?;
         session.killer.kill()
+    }
+}
+
+/// Wrap raw user text in claude's stream-json user-message envelope and
+/// write it to `input`, followed by a newline so the child reads it
+/// immediately. Used by both the launch-time initial message and by the
+/// per-turn `send_input` path.
+fn write_stream_message(input: &mut dyn Write, text: &str) -> Result<()> {
+    let envelope = json!({
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": text}
+            ]
+        }
+    });
+    let mut line = serde_json::to_string(&envelope)
+        .context("failed to encode stream-json user envelope")?;
+    line.push('\n');
+    input
+        .write_all(line.as_bytes())
+        .context("failed to write stream-json message to live session")?;
+    input
+        .flush()
+        .context("failed to flush stream-json message to live session")?;
+    Ok(())
+}
+
+/// Killer for a non-PTY piped child (stream-mode harness sessions).
+/// `pty_runner::spawn_piped_with_observer` returns an `Arc<Mutex<Option<Child>>>`
+/// shared with the drain thread; killing tells the kernel to terminate the
+/// child while the drain thread also has access for its eventual `wait`.
+struct PipedKiller {
+    child: std::sync::Arc<std::sync::Mutex<Option<std::process::Child>>>,
+}
+
+impl RuntimeKiller for PipedKiller {
+    fn kill(&mut self) -> Result<()> {
+        let mut guard = self
+            .child
+            .lock()
+            .map_err(|_| anyhow::anyhow!("piped child mutex poisoned"))?;
+        if let Some(child) = guard.as_mut() {
+            let _ = child.kill();
+        }
+        Ok(())
     }
 }
 

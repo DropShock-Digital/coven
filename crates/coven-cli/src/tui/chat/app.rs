@@ -136,6 +136,13 @@ pub(super) struct App {
     /// event don't clutter the chat after we've already kicked off a
     /// retry. Entries are cleared once their exit (or kill) event arrives.
     suppressed_session_ids: HashSet<String>,
+    /// Per-harness daemon session ids for long-lived stream-mode processes.
+    /// On the first chat turn for a stream-capable harness we launch with
+    /// `HarnessLaunchMode::Stream` and store the daemon session id here;
+    /// subsequent turns reuse it via `send_input` (no fresh launch, no
+    /// cold-start). Cleared on session exit/kill/`/clear`/`/new`. Today
+    /// only claude is stream-capable. See `docs/chat-persistence.md`.
+    harness_stream_session_ids: HashMap<String, String>,
     client: Box<dyn ChatClient>,
 }
 
@@ -296,6 +303,7 @@ impl App {
             last_chat_prompt: None,
             auto_retry_consumed: false,
             suppressed_session_ids: HashSet::new(),
+            harness_stream_session_ids: HashMap::new(),
             client,
         };
 
@@ -504,11 +512,14 @@ impl App {
     /// does. Used by Ctrl+L so the keybind doesn't have to fake a slash
     /// command through the parser. Also drops the harness conversation ids
     /// (both in-memory and on disk) so the next turn starts a fresh thread
-    /// rather than silently resuming after a restart.
+    /// rather than silently resuming after a restart, and tears down any
+    /// long-lived stream sessions so the next claude turn cold-starts a
+    /// fresh process.
     pub(super) fn clear_transcript(&mut self) {
         self.messages.clear();
         self.scroll_offset = 0;
         self.harness_conversation_ids.clear();
+        self.kill_all_stream_sessions();
         self.clear_persisted_conversations();
         self.push_system_message("Chat cleared.");
     }
@@ -516,13 +527,31 @@ impl App {
     /// Drop the in-memory + persisted harness conversation ids without
     /// touching the visible transcript. Useful when a user wants to start
     /// a fresh thread (next message will create a new harness session) but
-    /// keep the prior exchange visible for their own reference.
+    /// keep the prior exchange visible for their own reference. Tears down
+    /// any long-lived stream sessions for the same reason as `/clear`.
     pub(super) fn start_new_conversation(&mut self) {
         self.harness_conversation_ids.clear();
+        self.kill_all_stream_sessions();
         self.clear_persisted_conversations();
         self.push_system_message(
             "Started a new conversation. Your next message creates a fresh thread; the transcript above stays for reference.",
         );
+    }
+
+    /// Kill every tracked stream-mode daemon session and clear our local
+    /// map. Best-effort: kill failures are logged but don't block the
+    /// caller. Used by `/clear` and `/new` to ensure the next message
+    /// cold-starts a fresh stream process.
+    fn kill_all_stream_sessions(&mut self) {
+        let ids: Vec<String> = self.harness_stream_session_ids.values().cloned().collect();
+        for id in ids {
+            if let Err(error) = self.client.kill_session(&id) {
+                self.push_system_message(&format!(
+                    "Stream session {id} kill failed: {error}. Daemon may still hold it."
+                ));
+            }
+        }
+        self.harness_stream_session_ids.clear();
     }
 
     pub(super) fn handle_slash_command(&mut self, input: &str) -> SlashCommandResult {
@@ -851,6 +880,24 @@ impl App {
         // Stash the prompt so stale-id recovery can auto-resend it without
         // making the user retype.
         self.last_chat_prompt = Some(prompt.to_string());
+
+        // Fast path for stream-mode harnesses (today: claude). If we
+        // already have a long-lived stream session for this harness, send
+        // the next user message into it instead of cold-starting a new
+        // daemon session.
+        if harness::harness_supports_stream_mode(harness) {
+            if let Some(stream_id) = self.harness_stream_session_ids.get(harness).cloned() {
+                self.active_session_id = Some(stream_id.clone());
+                self.active_session_harness = Some(harness.to_string());
+                self.chat_owns_active_session = true;
+                self.reset_event_poll_failures();
+                self.forward_input_to_session(&stream_id, prompt);
+                // No SessionRecord to return — the caller's "Started
+                // daemon session" outcome is suppressed for warm sends.
+                return None;
+            }
+        }
+
         let hint = self.conversation_hint_for_harness(harness);
         // Same map that holds the harness-CLI session id also serves as the
         // ledger conversation id, so /sessions can collapse multi-turn
@@ -858,7 +905,13 @@ impl App {
         // from output), so it lands as an ungrouped row — see
         // `docs/chat-persistence.md`.
         let conversation_id = self.harness_conversation_ids.get(harness).cloned();
-        let result = LaunchRequest::for_current_dir(harness, prompt).map(|request| {
+        let launch_mode = if harness::harness_supports_stream_mode(harness) {
+            crate::harness::HarnessLaunchMode::Stream
+        } else {
+            crate::harness::HarnessLaunchMode::NonInteractive
+        };
+        let result = LaunchRequest::for_current_dir(harness, prompt).map(|mut request| {
+            request.launch_mode = launch_mode;
             let request = match hint {
                 Some(hint) => request.with_conversation(hint),
                 None => request,
@@ -876,6 +929,10 @@ impl App {
                 self.chat_owns_active_session = true;
                 self.last_event_seq = None;
                 self.reset_event_poll_failures();
+                if launch_mode == crate::harness::HarnessLaunchMode::Stream {
+                    self.harness_stream_session_ids
+                        .insert(harness.to_string(), session.id.clone());
+                }
                 self.push_system_message("Connected. Waiting for the reply.");
                 self.poll_session_events();
                 Some(session)
@@ -1132,6 +1189,12 @@ impl App {
             return;
         }
         self.harness_conversation_ids.remove(&harness);
+        // The dying stream session (if any) can't be reused: claude rejected
+        // its --resume id and is about to exit. Drop it so the auto-retry
+        // cold-starts a fresh stream process instead of forwarding to a
+        // half-dead pipe. The eventual exit event will be ignored thanks
+        // to the suppression entry below.
+        self.harness_stream_session_ids.remove(&harness);
         self.persist_conversations();
         // Hide any further output and the eventual exit event for the
         // failed session so the user only sees the system message + the
@@ -1164,6 +1227,61 @@ impl App {
         }
     }
 
+    /// Parse a chunk of stream-mode harness output (newline-delimited JSON)
+    /// and turn it into chat-visible messages. Each line is one JSON event:
+    /// `assistant.message.content[].text` becomes an agent message; the
+    /// `result` event marks the turn complete and clears `is_responding`;
+    /// other event types (system init, rate_limit_event, …) are ignored
+    /// for now. Malformed lines are silently dropped — stream-mode is too
+    /// noisy to surface every parse error.
+    fn dispatch_stream_json_output(&mut self, _session_id: &str, data: &str) {
+        let sender = self.active_agent_label().to_string();
+        for line in data.split('\n') {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(value): Result<serde_json::Value, _> = serde_json::from_str(trimmed) else {
+                continue;
+            };
+            let Some(kind) = value.get("type").and_then(serde_json::Value::as_str) else {
+                continue;
+            };
+            match kind {
+                "assistant" => {
+                    let Some(content) = value
+                        .get("message")
+                        .and_then(|m| m.get("content"))
+                        .and_then(serde_json::Value::as_array)
+                    else {
+                        continue;
+                    };
+                    let mut buffer = String::new();
+                    for block in content {
+                        if block.get("type").and_then(serde_json::Value::as_str) == Some("text") {
+                            if let Some(text) = block.get("text").and_then(serde_json::Value::as_str)
+                            {
+                                buffer.push_str(text);
+                            }
+                        }
+                    }
+                    if !buffer.is_empty() {
+                        if self.streaming_mode.is_live() {
+                            self.push_or_append_agent_message(&sender, &buffer);
+                        } else {
+                            self.buffer_pending_agent_output(&sender, &buffer);
+                        }
+                    }
+                }
+                "result" => {
+                    self.flush_pending_agent_buffer();
+                    self.is_responding = false;
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn push_event_message(&mut self, event: &store::EventRecord) {
         // Drop events from sessions we've decided to hide (today: failed
         // sessions whose stale-id we already auto-recovered from). Clear
@@ -1183,6 +1301,18 @@ impl App {
                     // The stale handler may have just suppressed this very
                     // session; if so, skip displaying this chunk too.
                     if self.suppressed_session_ids.contains(&event.session_id) {
+                        return;
+                    }
+                    // Stream-mode output is newline-delimited JSON. Parse
+                    // assistant text directly out of it instead of feeding
+                    // it through the text/ANSI cleaner meant for PTY
+                    // sessions.
+                    let is_stream = self
+                        .harness_stream_session_ids
+                        .values()
+                        .any(|id| id == &event.session_id);
+                    if is_stream {
+                        self.dispatch_stream_json_output(&event.session_id, &data);
                         return;
                     }
                     let sender = self.active_agent_label().to_string();
@@ -1207,6 +1337,11 @@ impl App {
                     self.active_session_harness = None;
                     self.chat_owns_active_session = false;
                 }
+                // If a stream session for any harness died, drop its id so
+                // the next turn cold-starts a fresh one instead of
+                // forwarding to a dead pipe.
+                self.harness_stream_session_ids
+                    .retain(|_, id| id != &event.session_id);
                 self.agent_output_mode = AgentOutputMode::Unknown;
                 self.push_system_message(&format!("Session {status}."));
             }
@@ -1218,6 +1353,8 @@ impl App {
                     self.chat_owns_active_session = false;
                     self.is_responding = false;
                 }
+                self.harness_stream_session_ids
+                    .retain(|_, id| id != &event.session_id);
                 self.agent_output_mode = AgentOutputMode::Unknown;
                 self.push_system_message("Session kill recorded.");
             }
@@ -2405,6 +2542,156 @@ mod tests {
     }
 
     #[test]
+    fn first_claude_chat_turn_launches_in_stream_mode_and_tracks_the_daemon_session_id() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "hello".to_string();
+        app.cursor_pos = app.input.len();
+
+        app.handle_input();
+
+        let launched = mirror.launched.borrow();
+        assert_eq!(launched.len(), 1, "first claude turn must launch once");
+        assert_eq!(
+            launched[0].launch_mode,
+            crate::harness::HarnessLaunchMode::Stream,
+            "claude chat turns must take the stream path",
+        );
+        let session_id = app
+            .active_session_id()
+            .expect("first launch sets active session id")
+            .to_string();
+        assert_eq!(
+            app.harness_stream_session_ids.get("claude").cloned(),
+            Some(session_id),
+            "first stream launch must register its daemon session id under claude"
+        );
+    }
+
+    #[test]
+    fn second_claude_chat_turn_reuses_the_stream_session_via_send_input_not_launch() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "first".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let stream_session_id = app
+            .active_session_id()
+            .expect("first launch")
+            .to_string();
+        assert_eq!(mirror.launched.borrow().len(), 1);
+
+        // Stream-mode sessions don't fire an exit between turns; instead
+        // each turn ends with a `result` event that clears is_responding.
+        // Simulate that so the next user message isn't gated.
+        let result_chunk = r#"{"type":"result","subtype":"success","is_error":false}"#.to_string() + "\n";
+        app.push_event_message(&output_event(1, &stream_session_id, &result_chunk));
+        assert!(!app.is_responding);
+
+        app.input = "second".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+
+        assert_eq!(
+            mirror.launched.borrow().len(),
+            1,
+            "second turn must NOT cold-start a new launch when a stream session exists"
+        );
+        assert!(
+            mirror
+                .calls
+                .borrow()
+                .iter()
+                .any(|call| call == &format!("input:{stream_session_id}:second\n")),
+            "second turn must forward via send_input to the existing stream session"
+        );
+    }
+
+    #[test]
+    fn codex_chat_turn_does_not_take_the_stream_path() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(0); // codex
+        app.input = "do a thing".to_string();
+        app.cursor_pos = app.input.len();
+
+        app.handle_input();
+
+        let launched = mirror.launched.borrow();
+        assert_eq!(launched.len(), 1);
+        assert_eq!(
+            launched[0].launch_mode,
+            crate::harness::HarnessLaunchMode::NonInteractive,
+            "codex doesn't support stream mode; must fall back to non-interactive"
+        );
+        assert!(
+            app.harness_stream_session_ids.is_empty(),
+            "codex turns must not register a stream session id"
+        );
+    }
+
+    #[test]
+    fn stream_json_assistant_output_renders_as_chat_message() {
+        let client = RecordingChatClient::default();
+        let (mut app, _) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "hi".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let session_id = app.active_session_id().expect("first launch").to_string();
+
+        let chunk = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hello, Val."}]}}"#.to_string() + "\n";
+        app.push_event_message(&output_event(1, &session_id, &chunk));
+
+        assert!(
+            app.messages
+                .iter()
+                .any(|m| m.content.contains("Hello, Val.")
+                    && matches!(m.role, MessageRole::Agent)),
+            "stream-json assistant text must be rendered as an agent message"
+        );
+        // is_responding stays true until the result event arrives.
+        assert!(app.is_responding);
+
+        let result_chunk = r#"{"type":"result","subtype":"success","is_error":false}"#.to_string() + "\n";
+        app.push_event_message(&output_event(2, &session_id, &result_chunk));
+        assert!(!app.is_responding, "result event must clear is_responding");
+    }
+
+    #[test]
+    fn stream_session_exit_event_drops_the_tracked_id_so_next_turn_cold_starts() {
+        let client = RecordingChatClient::default();
+        let (mut app, mirror) = app_with_client(client);
+        app.active_agent = Some(1); // claude
+        app.input = "first".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        let session_id = app.active_session_id().expect("first launch").to_string();
+
+        // Simulate the stream process dying (crash, kill, etc.).
+        app.push_event_message(&EventRecord {
+            seq: 1,
+            id: "event-exit".to_string(),
+            session_id: session_id.clone(),
+            kind: "exit".to_string(),
+            payload_json: serde_json::json!({ "status": "failed" }).to_string(),
+            created_at: "2026-05-19T00:00:00Z".to_string(),
+        });
+        assert!(
+            app.harness_stream_session_ids.is_empty(),
+            "exit must drop the dead stream session from the per-harness map"
+        );
+
+        // Next turn cold-starts a fresh stream session instead of forwarding.
+        app.input = "second".to_string();
+        app.cursor_pos = app.input.len();
+        app.handle_input();
+        assert_eq!(mirror.launched.borrow().len(), 2);
+    }
+
+    #[test]
     fn slash_new_drops_conversation_ids_but_preserves_visible_transcript() {
         let coven_home = tempfile::tempdir().unwrap();
         let project_root = tempfile::tempdir().unwrap();
@@ -2722,12 +3009,11 @@ mod tests {
         let retry_session = app.active_session_id().expect("retry session").to_string();
         assert_ne!(retry_session, failed_session);
 
-        // Output from the retry session must still be rendered.
-        app.push_event_message(&output_event(
-            2,
-            &retry_session,
-            "Hi from the new conversation.\n",
-        ));
+        // Output from the retry session must still be rendered. The retry
+        // is a stream-mode claude session, so the chunk is a stream-json
+        // assistant event rather than plain text.
+        let assistant_chunk = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Hi from the new conversation."}]}}"#.to_string() + "\n";
+        app.push_event_message(&output_event(2, &retry_session, &assistant_chunk));
 
         assert!(
             app.messages

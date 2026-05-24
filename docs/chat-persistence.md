@@ -7,8 +7,8 @@ extend the mechanism to additional harnesses.
 
 | Harness | Resume support | Mechanism |
 | --- | --- | --- |
-| `claude` | ✅ | `claude --print --session-id <uuid>` on turn 1; `claude --print --resume <uuid>` on subsequent turns |
-| `codex` | ✅ | Turn 1 runs plain `codex exec …`; chat captures `session id: <uuid>` from output and feeds it back as `codex exec … resume <uuid> <prompt>` on later turns |
+| `claude` | ✅ stream-mode | Long-lived `claude --print --input-format stream-json --output-format stream-json --verbose [--session-id|--resume <uuid>]` daemon process per chat. Turn 1 spawns + sends initial user envelope; turns 2..N pipe a new user envelope into the same stdin (no cold-start). |
+| `codex` | ✅ per-turn | Turn 1 runs plain `codex exec …`; chat captures `session id: <uuid>` from output and feeds it back as `codex exec … resume <uuid> <prompt>` on later turns. Codex has no equivalent of stream-json so each turn cold-starts. |
 
 Conversations persist across `coven chat` invocations on a per-project basis:
 on startup the chat seeds its in-memory map from
@@ -51,10 +51,15 @@ modes.
 
 ## How it works
 
-Every chat turn launches a fresh daemon session in `NonInteractive` launch
-mode (`claude --print …`, `codex exec …`). To preserve conversational state
-across those one-shot launches, the chat app passes a `ConversationHint` along
-with each launch:
+Codex chat turns launch a fresh daemon session in `NonInteractive` mode
+(`codex exec …`) per turn. Claude chat turns launch a single long-lived
+daemon session in `Stream` mode (`claude --print --input-format stream-json
+--output-format stream-json --verbose …`) on the first turn; every
+subsequent turn pipes a JSON user message into the same process's stdin
+and reads JSON events back from its stdout — no cold-start. To preserve
+conversational state across daemon-session boundaries (codex per-turn,
+claude across `coven chat` restarts), the chat app passes a
+`ConversationHint` along with each launch:
 
 - **`Init { id }`** — first turn for this harness. The harness CLI is told to
   claim a session under this UUID.
@@ -187,15 +192,20 @@ CLI's own session API avoids both problems.
 
 ## Future work
 
-### True streaming follow-ups
+### Stream-mode for codex
 
-Each follow-up turn is a fresh process; latency includes the harness CLI's
-cold start (~1-3 s for claude). For lower-latency chat, options are:
+Codex doesn't have a long-lived stream-json mode (only `--json` for a
+single result), so codex chat turns still cold-start. If Codex ships
+something equivalent, the wiring is mostly already there: add `"codex"`
+to `harness_supports_stream_mode`, fill in `stream_args` for codex, and
+update `daemon::write_stream_message` if codex's user-message envelope
+differs from claude's.
 
-- Use `claude --input-format stream-json --output-format stream-json` to keep
-  one harness process alive across turns, feeding new prompts as JSON
-  messages on stdin. Avoids cold-start per turn but requires a
-  daemon-side change to keep a long-lived process per chat and route
-  per-turn JSON messages to it.
-- A first-party Coven gateway that holds the model connection directly, with
-  the harness CLI being just one of several backends.
+### First-party Coven gateway
+
+The longer-term plan: a first-party Coven gateway that holds the model
+connection directly. Harness CLIs become one of several backends rather
+than the only option. Would let Coven offer chat that doesn't depend on
+having claude or codex installed locally, and would unlock features
+neither CLI exposes (cross-harness conversation handoff, server-side
+multi-user state, …).

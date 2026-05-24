@@ -322,9 +322,10 @@ fn launch_mode_from_payload(payload: &Value) -> Result<HarnessLaunchMode> {
     match payload.get("launchMode").and_then(Value::as_str) {
         Some("interactive") | None => Ok(HarnessLaunchMode::Interactive),
         Some("nonInteractive") => Ok(HarnessLaunchMode::NonInteractive),
-        Some(other) => {
-            anyhow::bail!("launchMode must be `interactive` or `nonInteractive`, got `{other}`")
-        }
+        Some("stream") => Ok(HarnessLaunchMode::Stream),
+        Some(other) => anyhow::bail!(
+            "launchMode must be `interactive`, `nonInteractive`, or `stream`, got `{other}`"
+        ),
     }
 }
 

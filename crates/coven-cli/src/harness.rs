@@ -16,6 +16,19 @@ pub struct HarnessSummary {
 pub enum HarnessLaunchMode {
     Interactive,
     NonInteractive,
+    /// Long-lived stream-json process: stdin reads newline-delimited JSON
+    /// messages, stdout writes newline-delimited JSON events. Only
+    /// `claude` supports this today (`-p --input-format stream-json
+    /// --output-format stream-json --verbose`). Codex falls back to
+    /// `NonInteractive` if asked for `Stream`.
+    Stream,
+}
+
+/// Whether the harness CLI has a long-lived JSON-streaming mode the daemon
+/// can keep alive across chat turns. Claude does (`stream-json`); codex
+/// doesn't (only one-shot `codex exec`). See `docs/chat-persistence.md`.
+pub fn harness_supports_stream_mode(harness_id: &str) -> bool {
+    harness_id == "claude"
 }
 
 /// Hint passed when a chat turn wants to participate in a multi-turn
@@ -62,6 +75,10 @@ impl HarnessCommandSpec {
         let prefix_args = match mode {
             HarnessLaunchMode::Interactive => self.interactive_prompt_prefix_args,
             HarnessLaunchMode::NonInteractive => self.non_interactive_prompt_prefix_args,
+            // Stream mode bypasses `prompt_args` entirely (no trailing
+            // prompt; messages arrive on stdin). Fall back to
+            // non-interactive args if a caller somehow lands here.
+            HarnessLaunchMode::Stream => self.non_interactive_prompt_prefix_args,
         };
 
         prefix_args
@@ -135,6 +152,20 @@ pub fn command_parts_for_harness_with_conversation(
         .find(|spec| spec.id == harness_id)
         .ok_or_else(|| anyhow!("unsupported harness `{harness_id}`"))?;
 
+    // Stream mode reads prompts from stdin as JSON messages, so the prompt
+    // argument is not appended. The continuity hint (claude resume / init)
+    // still maps to a CLI flag; codex falls back to one-shot.
+    if mode == HarnessLaunchMode::Stream {
+        if let Some(args) = stream_args(&spec, hint) {
+            return Ok((spec.executable, args));
+        }
+        // Harness doesn't support stream: fall through to non-interactive.
+        return Ok((
+            spec.executable,
+            spec.prompt_args(prompt, HarnessLaunchMode::NonInteractive),
+        ));
+    }
+
     if let Some(hint) = hint {
         if let Some(args) = continuity_args(&spec, mode, hint) {
             return Ok((spec.executable, args.into_iter().chain(std::iter::once(prompt.to_string())).collect()));
@@ -142,6 +173,36 @@ pub fn command_parts_for_harness_with_conversation(
     }
 
     Ok((spec.executable, spec.prompt_args(prompt, mode)))
+}
+
+/// Per-harness translation of stream-mode launch into CLI args. Stream-mode
+/// processes are long-lived: stdin is a stream of newline-delimited JSON
+/// messages and stdout is a stream of newline-delimited JSON events.
+/// Returns `None` for harnesses that don't support stream mode so the
+/// caller can fall back to a one-shot launch.
+fn stream_args(spec: &HarnessCommandSpec, hint: Option<&ConversationHint>) -> Option<Vec<String>> {
+    match spec.id {
+        "claude" => {
+            let mut args: Vec<String> = vec![
+                "--print".to_string(),
+                "--input-format".to_string(),
+                "stream-json".to_string(),
+                "--output-format".to_string(),
+                "stream-json".to_string(),
+                "--verbose".to_string(),
+            ];
+            if let Some(hint) = hint {
+                let flag = match hint {
+                    ConversationHint::Init { .. } => "--session-id",
+                    ConversationHint::Resume { .. } => "--resume",
+                };
+                args.push(flag.to_string());
+                args.push(hint.id().to_string());
+            }
+            Some(args)
+        }
+        _ => None,
+    }
 }
 
 /// Per-harness translation of a `ConversationHint` into CLI args that precede
