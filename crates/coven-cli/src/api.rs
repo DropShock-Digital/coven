@@ -185,6 +185,7 @@ pub fn handle_request_with_runtime(
             json_response(status, &response)
         }
         ("POST", "/cast") => submit_cast(coven_home, body),
+        ("GET", "/cast-codes") => cast_codes_response(),
         ("GET", "/sessions") => {
             let conn = store::open_store(&store_path(coven_home))?;
             let sessions = store::list_sessions(&conn)?;
@@ -555,6 +556,55 @@ fn overview_response(coven_home: &Path) -> Result<ApiResponse> {
             last_research_delta: 0,
         },
     )
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CastCodeDto {
+    code: &'static str,
+    description: &'static str,
+    #[serde(rename = "type")]
+    code_type: &'static str,
+}
+
+fn cast_codes_response() -> Result<ApiResponse> {
+    let codes = [
+        CastCodeDto {
+            code: "~?",
+            description: "Status all familiars",
+            code_type: "status",
+        },
+        CastCodeDto {
+            code: "~?{familiar}",
+            description: "Status of specific familiar",
+            code_type: "status",
+        },
+        CastCodeDto {
+            code: "~>{familiar}",
+            description: "Switch to familiar",
+            code_type: "switch",
+        },
+        CastCodeDto {
+            code: "~delegate:{familiar}",
+            description: "Delegate task to familiar",
+            code_type: "delegate",
+        },
+        CastCodeDto {
+            code: "~broadcast *",
+            description: "Broadcast to all familiars",
+            code_type: "broadcast",
+        },
+        CastCodeDto {
+            code: "~^ resume",
+            description: "Resume interrupted context",
+            code_type: "resume",
+        },
+        CastCodeDto {
+            code: "~<handoff",
+            description: "Hand off context to target",
+            code_type: "handoff",
+        },
+    ];
+    json_response(200, &codes)
 }
 
 fn submit_cast(coven_home: &Path, body: Option<&str>) -> Result<ApiResponse> {
@@ -2417,6 +2467,35 @@ mod tests {
         assert_eq!(body["open_sessions"], 2);
         assert_eq!(body["active_familiars"], 0);
         assert_eq!(body["skills_count"], 0);
+        Ok(())
+    }
+
+    #[test]
+    fn get_cast_codes_returns_grammar_templates() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let response = handle_request("GET", "/api/v1/cast-codes", temp.path(), None)?;
+        assert_eq!(response.status, 200);
+        assert_eq!(response.content_type, "application/json");
+        let body: serde_json::Value = serde_json::from_str(&response.body)?;
+        let codes = body.as_array().expect("cast-codes returns an array");
+        let literals: Vec<&str> = codes
+            .iter()
+            .map(|c| c["code"].as_str().expect("code is a string"))
+            .collect();
+        assert!(literals.contains(&"~?"));
+        assert!(literals.contains(&"~>{familiar}"));
+        assert!(literals.contains(&"~delegate:{familiar}"));
+        assert!(literals.contains(&"~broadcast *"));
+        // No per-familiar literals — those are cockpit-side concerns once the
+        // daemon learns about specific familiars.
+        for code in &literals {
+            assert!(
+                !code.contains("sage") && !code.contains("cody"),
+                "unexpected per-familiar literal in /cast-codes: {code}"
+            );
+        }
+        let first = &codes[0];
+        assert_eq!(first["type"], "status");
         Ok(())
     }
 }
