@@ -142,7 +142,7 @@ pub fn built_in_harness_specs() -> Vec<HarnessCommandSpec> {
     ]
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn command_parts_for_harness(
     harness_id: &str,
     prompt: &str,
