@@ -128,6 +128,13 @@ fn stream_claude_with_program<W: Write>(
     system_prompt: Option<&str>,
     out: &mut W,
 ) -> Result<i32> {
+    // `--input-format stream-json` makes claude read user messages as JSONL
+    // on stdin and IGNORE the positional <prompt>. We only want that mode
+    // when the caller is feeding stdin (long-lived chat); for one-shot turns
+    // we drop `--input-format stream-json` so the positional prompt is honored.
+    // Without this branch, one-shot turns hang on stdin then exit with no
+    // assistant text — the symptom that surfaces in Cave as
+    // `_The "claude" harness completed but produced no output._`
     let mut args: Vec<&str> = vec!["-p"];
     if forward_stdin {
         args.extend_from_slice(&["--input-format", "stream-json"]);
