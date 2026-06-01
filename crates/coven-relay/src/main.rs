@@ -5,7 +5,7 @@
 //! serving (2D) are added in subsequent phases.
 
 use anyhow::Result;
-use axum::{Router, routing::get, response::IntoResponse};
+use axum::{response::IntoResponse, routing::get, Router};
 use std::net::SocketAddr;
 use tracing::info;
 use tracing_subscriber::EnvFilter;

@@ -3,10 +3,7 @@
 //! Right now this accepts the upgrade and immediately closes. Auth + peer
 //! routing land in Phase 2B.
 
-use axum::{
-    extract::WebSocketUpgrade,
-    response::IntoResponse,
-};
+use axum::{extract::WebSocketUpgrade, response::IntoResponse};
 
 pub async fn handler(ws: WebSocketUpgrade) -> impl IntoResponse {
     ws.on_upgrade(|_socket| async move {
