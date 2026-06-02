@@ -59,7 +59,7 @@ pub fn build_harness_command(
     cwd: &Path,
     mode: crate::harness::HarnessLaunchMode,
 ) -> Result<HarnessCommand> {
-    build_harness_command_with_conversation(harness_id, prompt, cwd, mode, None)
+    build_harness_command_with_conversation(harness_id, prompt, cwd, mode, None, None)
 }
 
 pub fn build_harness_command_with_conversation(
@@ -68,12 +68,14 @@ pub fn build_harness_command_with_conversation(
     cwd: &Path,
     mode: crate::harness::HarnessLaunchMode,
     conversation: Option<&crate::harness::ConversationHint>,
+    familiar: Option<&crate::harness::FamiliarContext>,
 ) -> Result<HarnessCommand> {
     let (program, args) = crate::harness::command_parts_for_harness_with_conversation(
         harness_id,
         prompt,
         mode,
         conversation,
+        familiar,
     )?;
 
     Ok(HarnessCommand {
