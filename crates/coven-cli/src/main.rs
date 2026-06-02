@@ -11,7 +11,6 @@ use clap::{Parser, Subcommand};
 use uuid::Uuid;
 
 mod api;
-mod capabilities;
 mod cockpit_sources;
 mod control_plane;
 mod daemon;
@@ -1051,11 +1050,15 @@ fn run_session(
     if stream_json && selected_harness.id == "claude" {
         let stdout = io::stdout();
         let mut handle = stdout.lock();
+        let claude_system_prompt: Option<String> = familiar_ctx
+            .as_ref()
+            .map(|f| f.identity_preamble());
         let exit_code = pty_runner::stream_claude(
             &cwd,
             &record.id,
             &effective_prompt,
             stream_json_input,
+            claude_system_prompt.as_deref(),
             &mut handle,
         );
         drop(handle);
@@ -1128,13 +1131,21 @@ fn run_session(
     } else {
         None
     };
+    // Only pass familiar_ctx to the arg builder for harnesses that have a
+    // system_prompt_flag (e.g. Claude). For harnesses without one (e.g. Codex)
+    // the preamble is already embedded in effective_prompt — passing ctx here
+    // too would produce a double-injection.
+    let familiar_for_args = spec
+        .as_ref()
+        .filter(|s| s.system_prompt_flag.is_some())
+        .and(familiar_ctx.as_ref());
     let command = pty_runner::build_harness_command_with_conversation(
         selected_harness.id,
         &effective_prompt,
         &cwd,
         harness_launch_mode_for_stdio(),
         conversation_hint.as_ref(),
-        familiar_ctx.as_ref(),
+        familiar_for_args,
     )?;
     match pty_runner::run_attached(&command) {
         Ok(result) => {
