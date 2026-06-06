@@ -18,6 +18,7 @@ mod cockpit_sources;
 mod control_plane;
 mod daemon;
 mod encrypted_artifacts;
+mod coven_calls;
 mod eval_loop;
 mod familiar_identity;
 mod harness;

@@ -81,6 +81,12 @@ pub struct SessionLaunch {
     /// using the local familiars config and passes it to the harness arg builder.
     /// `None` = no identity injection (backwards-compatible default).
     pub familiar_id: Option<String>,
+    /// Optional id of the familiar that spawned this session (i.e. the caller in
+    /// a `sessions_spawn` / `sessions_send` delegation). When set alongside
+    /// `familiar_id`, the daemon records the delegation in `cave-coven-calls.json`
+    /// so the Coven Calls graph in coven-cave has data to render.
+    /// `None` = direct user launch, not a delegation.
+    pub caller_familiar_id: Option<String>,
 }
 
 pub trait SessionRuntime {
@@ -260,6 +266,25 @@ pub fn handle_request_with_runtime(
                 None => json_response(404, &serde_json::json!({"error": "unknown harness"})),
             }
         }
+        // Coven Calls delegation ledger
+        ("GET", "/coven-calls") => {
+            let calls = crate::coven_calls::load_calls(coven_home)?;
+            json_response(200, &serde_json::json!({ "ok": true, "calls": calls }))
+        }
+        ("GET", path) if path.starts_with("/coven-calls/") => {
+            let call_id = path.trim_start_matches("/coven-calls/");
+            let calls = crate::coven_calls::load_calls(coven_home)?;
+            match calls.into_iter().find(|c| c.id == call_id) {
+                Some(call) => json_response(200, &serde_json::json!({ "ok": true, "call": call })),
+                None => api_error(
+                    404,
+                    "call_not_found",
+                    "Coven call was not found.",
+                    Some(serde_json::json!({ "callId": call_id })),
+                ),
+            }
+        }
+        
         ("GET", "/memory") => json_response(200, &crate::cockpit_sources::scan_memory(coven_home)?),
         ("GET", "/research") => {
             json_response(200, &crate::cockpit_sources::read_research(coven_home)?)
@@ -420,6 +445,23 @@ fn launch_session(
             Some(json!({ "sessionId": record.id })),
         );
     }
+    // Record the inter-familiar delegation in cave-coven-calls.json so the
+    // Coven Calls graph in coven-cave has data to render. Best-effort: a
+    // write failure must not abort a successful launch.
+    if let (Some(caller_id), Some(callee_id)) = (
+        &launch.caller_familiar_id,
+        &launch.familiar_id,
+    ) {
+        if let Err(err) = crate::coven_calls::record_call(
+            coven_home,
+            caller_id,
+            callee_id,
+            &launch.prompt,
+            &record.id,
+        ) {
+            eprintln!("[coven-calls] warn: failed to record delegation: {err}");
+        }
+    }
     json_response(201, &record)
 }
 
@@ -465,6 +507,12 @@ fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
         .map(str::trim)
         .filter(|id| !id.is_empty())
         .map(ToOwned::to_owned);
+    let caller_familiar_id = payload
+        .get("callerFamiliarId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(ToOwned::to_owned);
 
     Ok(SessionLaunch {
         id: Uuid::new_v4().to_string(),
@@ -477,6 +525,7 @@ fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
         conversation,
         conversation_id,
         familiar_id,
+        caller_familiar_id,
     })
 }
 
@@ -3218,6 +3267,41 @@ icon = "ph:leaf-fill"
         assert_eq!(response.status, 200);
         let body: serde_json::Value = serde_json::from_str(&response.body)?;
         assert_eq!(body["action"], "cleared");
+        Ok(())
+    }
+
+    #[test]
+    fn get_coven_calls_api_route_returns_empty_array_when_no_file() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+
+        let response = handle_request(
+            "GET",
+            "/api/v1/coven-calls",
+            temp_dir.path(),
+            None,
+        )?;
+
+        assert_eq!(response.status, 200);
+        let body: serde_json::Value = serde_json::from_str(&response.body)?;
+        assert_eq!(body["ok"], true);
+        assert_eq!(body["calls"], serde_json::json!([]));
+        Ok(())
+    }
+
+    #[test]
+    fn get_coven_calls_by_id_returns_404_when_missing() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+
+        let response = handle_request(
+            "GET",
+            "/api/v1/coven-calls/no-such-id",
+            temp_dir.path(),
+            None,
+        )?;
+
+        assert_eq!(response.status, 404);
+        let body: serde_json::Value = serde_json::from_str(&response.body)?;
+        assert_eq!(body["error"]["code"], "call_not_found");
         Ok(())
     }
 }
