@@ -19,8 +19,10 @@ mod control_plane;
 mod daemon;
 mod encrypted_artifacts;
 mod eval_loop;
+mod familiar_identity;
 mod harness;
 mod openclaw_repo;
+mod parallel_protocol;
 mod patch;
 mod pc;
 mod privacy;
@@ -145,6 +147,33 @@ enum Command {
         #[command(subcommand)]
         command: LogsCommand,
     },
+    #[command(about = "Create, list, diagnose, and prune Coven worktrees")]
+    Wt {
+        #[arg(
+            help = "Branch to create or enter in the sibling <repo>.wt directory",
+            conflicts_with_all = ["list", "doctor", "prune_merged", "prune_stale"],
+            required_unless_present_any = ["list", "doctor", "prune_merged", "prune_stale"]
+        )]
+        branch: Option<String>,
+        #[arg(long, conflicts_with_all = ["doctor", "prune_merged", "prune_stale"], help = "List worktrees with claim and dirty state")]
+        list: bool,
+        #[arg(long, conflicts_with_all = ["list", "prune_merged", "prune_stale"], help = "Report protocol layout and hook issues")]
+        doctor: bool,
+        #[arg(long, conflicts_with_all = ["list", "doctor", "prune_stale"], help = "Remove clean worktrees whose branches are merged into the primary branch")]
+        prune_merged: bool,
+        #[arg(long, value_name = "DAYS", conflicts_with_all = ["list", "doctor", "prune_merged"], help = "Remove clean worktrees not modified for DAYS")]
+        prune_stale: Option<u64>,
+    },
+    #[command(about = "Manage TTL-bounded agent branch claims")]
+    Claim {
+        #[command(subcommand)]
+        command: ClaimCommand,
+    },
+    #[command(about = "Install Coven Parallel Work Protocol git hooks")]
+    Hooks {
+        #[command(subcommand)]
+        command: HooksCommand,
+    },
     #[command(about = "Replay/follow a session and forward input to live daemon sessions")]
     Attach { session_id: String },
     #[command(about = "Summon an archived session back, then replay/follow it")]
@@ -238,6 +267,38 @@ enum LogsCommand {
     },
 }
 
+#[derive(Subcommand, Debug)]
+enum ClaimCommand {
+    #[command(about = "Claim a branch for the current agent")]
+    Acquire {
+        #[arg(help = "Branch to claim")]
+        branch: String,
+    },
+    #[command(about = "Release this agent's claim for a branch")]
+    Release {
+        #[arg(help = "Branch to release")]
+        branch: String,
+    },
+    #[command(about = "Extend this agent's claim TTL for a branch")]
+    Heartbeat {
+        #[arg(help = "Branch whose claim should be extended")]
+        branch: String,
+    },
+    #[command(about = "Record the current HEAD for later hook canary checks")]
+    Canary {
+        #[arg(help = "Branch to associate with the current HEAD snapshot")]
+        branch: String,
+    },
+    #[command(about = "Show active and expired claims for this repository")]
+    Status,
+}
+
+#[derive(Subcommand, Debug)]
+enum HooksCommand {
+    #[command(about = "Install pre-commit and pre-push protocol hooks")]
+    Install,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InteractiveShellRoute {
     Chat,
@@ -311,6 +372,29 @@ fn run_cli(cli: Cli) -> Result<()> {
             None => tui::sessions::run_command(all, manage, plain, json),
         },
         Some(Command::Logs { command }) => run_logs_command(command),
+        Some(Command::Wt {
+            branch,
+            list,
+            doctor,
+            prune_merged,
+            prune_stale,
+        }) => parallel_protocol::run_wt_command(
+            branch.as_deref(),
+            list,
+            doctor,
+            prune_merged,
+            prune_stale,
+        ),
+        Some(Command::Claim { command }) => match command {
+            ClaimCommand::Acquire { branch } => parallel_protocol::claim_acquire(&branch),
+            ClaimCommand::Release { branch } => parallel_protocol::claim_release(&branch),
+            ClaimCommand::Heartbeat { branch } => parallel_protocol::claim_heartbeat(&branch),
+            ClaimCommand::Canary { branch } => parallel_protocol::claim_canary(&branch),
+            ClaimCommand::Status => parallel_protocol::claim_status(),
+        },
+        Some(Command::Hooks { command }) => match command {
+            HooksCommand::Install => parallel_protocol::hooks_install(),
+        },
         Some(Command::Attach { session_id }) => attach_session(&session_id),
         Some(Command::Summon { session_id }) => summon_session_command(&session_id),
         Some(Command::Archive { session_id }) => archive_session_command(&session_id),
@@ -661,6 +745,7 @@ fn launch_patch_session(request: &patch::PatchRequest) -> Result<String> {
         created_at: now.clone(),
         updated_at: now.clone(),
         conversation_id: None,
+        familiar_id: None,
         labels: Vec::new(),
         visibility: "private".to_string(),
     };
@@ -883,6 +968,7 @@ fn run_session(
         )
     })?;
     let cwd = project::resolve_inside_root(&project_root, cwd).context("failed to resolve cwd")?;
+    let coven_home = coven_home_dir()?;
     let store_path = coven_store_path()?;
     let conn = store::open_store(&store_path)?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
@@ -901,22 +987,7 @@ fn run_session(
     // via that flag in build_harness_command_with_conversation; the prompt stays
     // clean. For harnesses without one (Codex), we prepend a bracketed identity
     // preamble to the prompt here so the integration layer remains harness-agnostic.
-    let familiar_ctx: Option<harness::FamiliarContext> = familiar_id.and_then(|fid| {
-        coven_home_dir().ok().and_then(|home| {
-            cockpit_sources::read_familiars(&home)
-                .ok()
-                .and_then(|familiars| {
-                    familiars
-                        .into_iter()
-                        .find(|f| f.id == fid)
-                        .map(|f| harness::FamiliarContext {
-                            id: f.id,
-                            display_name: f.display_name,
-                            role: Some(f.role).filter(|r| !r.is_empty()),
-                        })
-                })
-        })
-    });
+    let familiar_ctx = familiar_identity::resolve_optional(&coven_home, familiar_id)?;
     let spec = harness::built_in_harness_specs()
         .into_iter()
         .find(|s| s.id == selected_harness.id);
@@ -973,6 +1044,7 @@ fn run_session(
             created_at: now.clone(),
             updated_at: now,
             conversation_id: None,
+            familiar_id: familiar_ctx.as_ref().map(|f| f.id.clone()),
             labels,
             visibility: visibility.unwrap_or("private").to_string(),
         };
@@ -2371,6 +2443,7 @@ mod tests {
             created_at: "2026-04-27T06:00:00Z".to_string(),
             updated_at: "2026-04-27T06:00:00Z".to_string(),
             conversation_id: None,
+            familiar_id: None,
             labels: Vec::new(),
             visibility: "private".to_string(),
         };
@@ -2394,6 +2467,7 @@ mod tests {
             created_at: "2026-05-14T07:00:00Z".to_string(),
             updated_at: "2026-05-14T07:00:01Z".to_string(),
             conversation_id: None,
+            familiar_id: None,
             labels: Vec::new(),
             visibility: "private".to_string(),
         };
@@ -2508,6 +2582,7 @@ mod tests {
             created_at: "2026-05-08T07:00:00Z".to_string(),
             updated_at: "2026-05-08T07:05:00Z".to_string(),
             conversation_id: None,
+            familiar_id: None,
             labels: Vec::new(),
             visibility: "private".to_string(),
         }
