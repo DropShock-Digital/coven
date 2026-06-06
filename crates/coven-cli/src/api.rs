@@ -284,7 +284,7 @@ pub fn handle_request_with_runtime(
                 ),
             }
         }
-        
+
         ("GET", "/memory") => json_response(200, &crate::cockpit_sources::scan_memory(coven_home)?),
         ("GET", "/research") => {
             json_response(200, &crate::cockpit_sources::read_research(coven_home)?)
@@ -448,18 +448,15 @@ fn launch_session(
     // Record the inter-familiar delegation in cave-coven-calls.json so the
     // Coven Calls graph in coven-cave has data to render. Best-effort: a
     // write failure must not abort a successful launch.
-    if let (Some(caller_id), Some(callee_id)) = (
-        &launch.caller_familiar_id,
-        &launch.familiar_id,
-    ) {
-        if let Err(err) = crate::coven_calls::record_call(
+    if let (Some(caller_id), Some(callee_id)) = (&launch.caller_familiar_id, &launch.familiar_id) {
+        if let Err(_err) = crate::coven_calls::emit_running(
             coven_home,
             caller_id,
             callee_id,
             &launch.prompt,
-            &record.id,
+            Some(record.id.as_str()),
         ) {
-            eprintln!("[coven-calls] warn: failed to record delegation: {err}");
+            eprintln!("[coven-calls] warn: failed to record delegation: {_err}");
         }
     }
     json_response(201, &record)
@@ -3274,12 +3271,7 @@ icon = "ph:leaf-fill"
     fn get_coven_calls_api_route_returns_empty_array_when_no_file() -> anyhow::Result<()> {
         let temp_dir = tempfile::tempdir()?;
 
-        let response = handle_request(
-            "GET",
-            "/api/v1/coven-calls",
-            temp_dir.path(),
-            None,
-        )?;
+        let response = handle_request("GET", "/api/v1/coven-calls", temp_dir.path(), None)?;
 
         assert_eq!(response.status, 200);
         let body: serde_json::Value = serde_json::from_str(&response.body)?;

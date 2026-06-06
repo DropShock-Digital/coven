@@ -818,7 +818,7 @@ impl App {
                             Some(&session.id),
                         ) {
                             Ok(call_id) => self.active_call_id = Some(call_id),
-                            Err(err) => {
+                            Err(_err) => {
                                 // Non-fatal: delegation event failures must never block the chat.
                             }
                         }
@@ -1641,18 +1641,17 @@ impl App {
                     event_payload_text(event, "status").unwrap_or_else(|| "exited".to_string());
                 self.is_responding = false;
                 // Resolve the delegation call status from the session exit status.
-                if let (Some(call_id), Some(home)) = (
-                    self.active_call_id.take(),
-                    self.coven_home.as_deref(),
-                ) {
+                if let (Some(call_id), Some(home)) =
+                    (self.active_call_id.take(), self.coven_home.as_deref())
+                {
                     let call_status = if status == "0" || status == "success" {
                         crate::coven_calls::CovenCallStatus::Completed
                     } else {
                         crate::coven_calls::CovenCallStatus::Failed
                     };
-                    let ended_at = chrono::Utc::now()
-                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-                    if let Err(err) = crate::coven_calls::emit_terminal(
+                    let ended_at =
+                        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    if let Err(_err) = crate::coven_calls::emit_terminal(
                         home,
                         &call_id,
                         call_status,
@@ -1680,13 +1679,12 @@ impl App {
             "kill" => {
                 self.flush_pending_agent_buffer();
                 // Delegation call was cancelled by a kill event.
-                if let (Some(call_id), Some(home)) = (
-                    self.active_call_id.take(),
-                    self.coven_home.as_deref(),
-                ) {
-                    let ended_at = chrono::Utc::now()
-                        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
-                    if let Err(err) = crate::coven_calls::emit_terminal(
+                if let (Some(call_id), Some(home)) =
+                    (self.active_call_id.take(), self.coven_home.as_deref())
+                {
+                    let ended_at =
+                        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    if let Err(_err) = crate::coven_calls::emit_terminal(
                         home,
                         &call_id,
                         crate::coven_calls::CovenCallStatus::Cancelled,
