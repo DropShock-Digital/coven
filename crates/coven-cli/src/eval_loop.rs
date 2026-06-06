@@ -1,0 +1,438 @@
+// ── eval_loop.rs ─────────────────────────────────────────────────────────────
+//
+// Daemon-side implementation of the eval-loop skill.
+//
+// State is entirely filesystem-backed:
+//   <familiar-workspace>/results.tsv          ← iteration history (read)
+//   <familiar-workspace>/eval-loop/run.lock   ← in-progress lock (run trigger)
+//   <familiar-workspace>/eval-loop/run.json   ← pending run spec (run trigger)
+//
+// The daemon never executes the loop itself — it:
+//   1. Reads + aggregates the TSV for GET state
+//   2. Writes a run.json spec + touches run.lock for POST /run
+//      (the familiar's runtime watches for run.json and drives the iteration)
+//
+// Familiar workspace path is resolved from ~/.coven/familiars.toml via the
+// `workspace` field, falling back to ~/.coven/familiars/<id>/.
+//
+// Author: Sage 🌿 · 2026-06-05
+
+use std::fs;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
+use chrono::{SecondsFormat, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+// ── TSV schema ────────────────────────────────────────────────────────────────
+//
+// Col indices (0-based):
+//   0  timestamp     ISO 8601
+//   1  track         synthesis | prompt | memory
+//   2  iteration     u32
+//   3  change_summary
+//   4  metric_before f64
+//   5  metric_after  f64
+//   6  delta         f64
+//   7  outcome       ACCEPT | REVERT
+//   8  branch        git branch name
+//   9  proposer_reasoning  (may be empty)
+//  10  failure_modes       (may be empty)
+
+const RESULTS_TSV: &str = "results.tsv";
+const EVAL_LOOP_DIR: &str = "eval-loop";
+const RUN_SPEC_FILE: &str = "run.json";
+const RUN_LOCK_FILE: &str = "run.lock";
+
+// ── DTOs ─────────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoopIterationDto {
+    pub id: String,
+    pub timestamp: String,
+    pub track: String,
+    pub iteration: u32,
+    pub change_summary: String,
+    pub metric_before: f64,
+    pub metric_after: f64,
+    pub delta: f64,
+    pub outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EvalLoopStateDto {
+    pub familiar_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_run: Option<String>,
+    pub iterations: Vec<LoopIterationDto>,
+    pub track_counts: TrackCounts,
+    pub total_accepted: u32,
+    pub total_reverted: u32,
+    pub running: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TrackCounts {
+    pub synthesis: u32,
+    pub prompt: u32,
+    pub memory: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSpec {
+    pub run_id: String,
+    pub familiar_id: String,
+    pub track: String,
+    pub requested_at: String,
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/// Read and aggregate eval-loop state for a familiar.
+///
+/// Returns `Ok(None)` when the familiar workspace has no `results.tsv`
+/// (skill not active yet). Returns structured state otherwise.
+pub fn get_eval_loop_state(
+    coven_home: &Path,
+    familiar_id: &str,
+) -> Result<Option<EvalLoopStateDto>> {
+    let workspace = familiar_workspace(coven_home, familiar_id);
+    let tsv_path = workspace.join(RESULTS_TSV);
+
+    let raw = match fs::read_to_string(&tsv_path) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("failed to read {}", tsv_path.display()))
+        }
+    };
+
+    let iterations = parse_results_tsv(&raw);
+    let running = is_running(&workspace);
+
+    let mut track_counts = TrackCounts::default();
+    let mut total_accepted: u32 = 0;
+    let mut total_reverted: u32 = 0;
+    let mut last_run: Option<String> = None;
+
+    for it in &iterations {
+        match it.track.as_str() {
+            "synthesis" => track_counts.synthesis += 1,
+            "prompt" => track_counts.prompt += 1,
+            "memory" => track_counts.memory += 1,
+            _ => {}
+        }
+        match it.outcome.as_str() {
+            "ACCEPT" => total_accepted += 1,
+            "REVERT" => total_reverted += 1,
+            _ => {}
+        }
+        // The TSV is appended newest-last; last row's timestamp = most recent run.
+        last_run = Some(it.timestamp.clone());
+    }
+
+    Ok(Some(EvalLoopStateDto {
+        familiar_id: familiar_id.to_string(),
+        last_run,
+        iterations,
+        track_counts,
+        total_accepted,
+        total_reverted,
+        running,
+    }))
+}
+
+/// Write a run spec so the familiar's runtime can pick it up and execute
+/// the iteration. The daemon does not run the loop directly.
+///
+/// Returns `Err` if a run is already in progress (lock file exists).
+pub fn enqueue_run(
+    coven_home: &Path,
+    familiar_id: &str,
+    track: &str,
+) -> Result<RunSpec> {
+    let track = validate_track(track)?;
+    let workspace = familiar_workspace(coven_home, familiar_id);
+    let eval_dir = workspace.join(EVAL_LOOP_DIR);
+
+    fs::create_dir_all(&eval_dir)
+        .with_context(|| format!("failed to create eval-loop dir at {}", eval_dir.display()))?;
+
+    let lock_path = eval_dir.join(RUN_LOCK_FILE);
+    if lock_path.exists() {
+        anyhow::bail!("eval-loop run already in progress for familiar `{familiar_id}`");
+    }
+
+    let spec = RunSpec {
+        run_id: Uuid::new_v4().to_string(),
+        familiar_id: familiar_id.to_string(),
+        track: track.to_string(),
+        requested_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+    };
+
+    // Write spec first, then lock — the familiar watches for lock disappearance
+    // to know a run completed. Atomic enough: both are small local writes.
+    let spec_path = eval_dir.join(RUN_SPEC_FILE);
+    let spec_json =
+        serde_json::to_string_pretty(&spec).context("failed to serialize run spec")?;
+    fs::write(&spec_path, &spec_json)
+        .with_context(|| format!("failed to write run spec at {}", spec_path.display()))?;
+
+    fs::write(&lock_path, &spec.run_id)
+        .with_context(|| format!("failed to write run lock at {}", lock_path.display()))?;
+
+    Ok(spec)
+}
+
+// ── Private helpers ───────────────────────────────────────────────────────────
+
+fn familiar_workspace(coven_home: &Path, familiar_id: &str) -> PathBuf {
+    // Convention: ~/.coven/familiars/<id>/
+    // This matches where familiars store their workspace data.
+    // If a TOML `workspace` field is added later, resolve it here.
+    coven_home.join("familiars").join(familiar_id)
+}
+
+fn is_running(workspace: &Path) -> bool {
+    workspace
+        .join(EVAL_LOOP_DIR)
+        .join(RUN_LOCK_FILE)
+        .exists()
+}
+
+fn validate_track(track: &str) -> Result<&str> {
+    match track {
+        "synthesis" | "prompt" | "memory" => Ok(track),
+        other => anyhow::bail!(
+            "track must be `synthesis`, `prompt`, or `memory`, got `{other}`"
+        ),
+    }
+}
+
+fn parse_results_tsv(raw: &str) -> Vec<LoopIterationDto> {
+    let mut out = Vec::new();
+    for line in raw.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let cols: Vec<&str> = trimmed.split('\t').collect();
+        if cols.len() < 8 {
+            continue;
+        }
+        // Skip header row: first col must parse as a timestamp, not "timestamp"
+        if cols[0] == "timestamp" || !cols[0].contains('T') {
+            continue;
+        }
+        let Ok(iteration) = cols[2].parse::<u32>() else {
+            continue;
+        };
+        let metric_before = cols[4].parse::<f64>().unwrap_or(0.0);
+        let metric_after = cols[5].parse::<f64>().unwrap_or(0.0);
+        let delta = cols[6].parse::<f64>().unwrap_or(0.0);
+        // Notes: combine proposer_reasoning (col 9) + failure_modes (col 10) if present
+        let notes = {
+            let reasoning = cols.get(9).copied().unwrap_or("").trim();
+            let failures = cols.get(10).copied().unwrap_or("").trim();
+            match (reasoning.is_empty(), failures.is_empty()) {
+                (true, true) => None,
+                (false, true) => Some(reasoning.to_string()),
+                (true, false) => Some(format!("failures: {failures}")),
+                (false, false) => Some(format!("{reasoning} | failures: {failures}")),
+            }
+        };
+        out.push(LoopIterationDto {
+            id: Uuid::new_v4().to_string(),
+            timestamp: cols[0].to_string(),
+            track: cols[1].to_string(),
+            iteration,
+            change_summary: cols[3].to_string(),
+            metric_before,
+            metric_after,
+            delta,
+            outcome: cols[7].to_string(),
+            notes,
+        });
+    }
+    out
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tsv_line(
+        ts: &str,
+        track: &str,
+        n: u32,
+        summary: &str,
+        before: f64,
+        after: f64,
+        delta: f64,
+        outcome: &str,
+    ) -> String {
+        format!("{ts}\t{track}\t{n}\t{summary}\t{before}\t{after}\t{delta}\t{outcome}\tmain\t\t\n")
+    }
+
+    #[test]
+    fn parse_results_tsv_skips_header_blank_and_comment_lines() {
+        let raw = format!(
+            "timestamp\ttrack\titeration\tchange_summary\tmetric_before\tmetric_after\tdelta\toutcome\tbranch\n\
+            \n\
+            # this is a comment\n\
+            {}",
+            tsv_line(
+                "2026-06-05T10:00:00Z",
+                "synthesis",
+                1,
+                "Tightened intro",
+                0.60,
+                0.68,
+                0.08,
+                "ACCEPT"
+            )
+        );
+        let rows = parse_results_tsv(&raw);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].track, "synthesis");
+        assert_eq!(rows[0].outcome, "ACCEPT");
+        assert!((rows[0].delta - 0.08).abs() < 1e-9);
+    }
+
+    #[test]
+    fn parse_results_tsv_handles_notes_columns() {
+        let line = "2026-06-05T11:00:00Z\tprompt\t2\tAdded context clue\t0.55\t0.50\t-0.05\tREVERT\tmain\treasoning here\tbad drift\n";
+        let rows = parse_results_tsv(line);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].outcome, "REVERT");
+        let notes = rows[0].notes.as_deref().unwrap_or("");
+        assert!(notes.contains("reasoning here"));
+        assert!(notes.contains("bad drift"));
+    }
+
+    #[test]
+    fn parse_results_tsv_empty_notes_when_absent() {
+        let line = tsv_line(
+            "2026-06-05T12:00:00Z",
+            "memory",
+            3,
+            "Pruned redundant entry",
+            0.70,
+            0.74,
+            0.04,
+            "ACCEPT",
+        );
+        let rows = parse_results_tsv(&line);
+        assert!(rows[0].notes.is_none());
+    }
+
+    #[test]
+    fn get_eval_loop_state_returns_none_when_tsv_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let result = get_eval_loop_state(temp.path(), "sage").unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn get_eval_loop_state_aggregates_correctly() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("familiars").join("sage");
+        fs::create_dir_all(&workspace).unwrap();
+        let tsv = format!(
+            "{}{}{}",
+            tsv_line("2026-06-05T10:00:00Z", "synthesis", 1, "S1", 0.60, 0.68, 0.08, "ACCEPT"),
+            tsv_line("2026-06-05T11:00:00Z", "prompt",    2, "P1", 0.55, 0.50, -0.05, "REVERT"),
+            tsv_line("2026-06-05T12:00:00Z", "memory",    3, "M1", 0.70, 0.74, 0.04, "ACCEPT"),
+        );
+        fs::write(workspace.join(RESULTS_TSV), tsv).unwrap();
+
+        let state = get_eval_loop_state(temp.path(), "sage").unwrap().unwrap();
+        assert_eq!(state.familiar_id, "sage");
+        assert_eq!(state.total_accepted, 2);
+        assert_eq!(state.total_reverted, 1);
+        assert_eq!(state.track_counts.synthesis, 1);
+        assert_eq!(state.track_counts.prompt, 1);
+        assert_eq!(state.track_counts.memory, 1);
+        assert_eq!(state.iterations.len(), 3);
+        assert_eq!(state.last_run.as_deref(), Some("2026-06-05T12:00:00Z"));
+        assert!(!state.running);
+    }
+
+    #[test]
+    fn get_eval_loop_state_detects_running_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("familiars").join("sage");
+        fs::create_dir_all(workspace.join(EVAL_LOOP_DIR)).unwrap();
+        fs::write(workspace.join(RESULTS_TSV), "").unwrap();
+        fs::write(workspace.join(EVAL_LOOP_DIR).join(RUN_LOCK_FILE), "lock-id").unwrap();
+
+        let state = get_eval_loop_state(temp.path(), "sage").unwrap().unwrap();
+        assert!(state.running);
+    }
+
+    #[test]
+    fn enqueue_run_writes_spec_and_lock() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("familiars").join("sage");
+        fs::create_dir_all(&workspace).unwrap();
+
+        let spec = enqueue_run(temp.path(), "sage", "synthesis").unwrap();
+        assert_eq!(spec.familiar_id, "sage");
+        assert_eq!(spec.track, "synthesis");
+
+        let lock_path = workspace.join(EVAL_LOOP_DIR).join(RUN_LOCK_FILE);
+        assert!(lock_path.exists(), "lock file must exist after enqueue");
+
+        let spec_path = workspace.join(EVAL_LOOP_DIR).join(RUN_SPEC_FILE);
+        let spec_raw = fs::read_to_string(&spec_path).unwrap();
+        let parsed: RunSpec = serde_json::from_str(&spec_raw).unwrap();
+        assert_eq!(parsed.run_id, spec.run_id);
+        assert_eq!(parsed.track, "synthesis");
+    }
+
+    #[test]
+    fn enqueue_run_rejects_unknown_track() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("familiars").join("sage");
+        fs::create_dir_all(&workspace).unwrap();
+
+        let err = enqueue_run(temp.path(), "sage", "bogus").unwrap_err();
+        assert!(err.to_string().contains("track must be"));
+    }
+
+    #[test]
+    fn enqueue_run_errors_when_already_running() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("familiars").join("sage");
+        let eval_dir = workspace.join(EVAL_LOOP_DIR);
+        fs::create_dir_all(&eval_dir).unwrap();
+        fs::write(eval_dir.join(RUN_LOCK_FILE), "prior-lock-id").unwrap();
+
+        let err = enqueue_run(temp.path(), "sage", "prompt").unwrap_err();
+        assert!(err.to_string().contains("already in progress"));
+    }
+
+    #[test]
+    fn validate_track_accepts_known_values() {
+        assert!(validate_track("synthesis").is_ok());
+        assert!(validate_track("prompt").is_ok());
+        assert!(validate_track("memory").is_ok());
+    }
+
+    #[test]
+    fn validate_track_rejects_unknown() {
+        assert!(validate_track("").is_err());
+        assert!(validate_track("harness").is_err());
+        assert!(validate_track("SYNTHESIS").is_err()); // case-sensitive
+    }
+}

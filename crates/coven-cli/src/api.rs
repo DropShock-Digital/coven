@@ -203,6 +203,40 @@ pub fn handle_request_with_runtime(
             update_familiar_icon(coven_home, id, body)
         }
         ("GET", "/skills") => json_response(200, &crate::cockpit_sources::scan_skills(coven_home)?),
+        ("GET", p) if p.starts_with("/skills/eval-loop/") && !p.ends_with("/run") => {
+            let familiar_id = p.trim_start_matches("/skills/eval-loop/");
+            match crate::eval_loop::get_eval_loop_state(coven_home, familiar_id)? {
+                Some(state) => json_response(200, &serde_json::json!({ "ok": true, "state": state })),
+                None => api_error(
+                    404,
+                    "skill_not_active",
+                    "eval-loop skill is not active for this familiar.",
+                    Some(serde_json::json!({ "familiarId": familiar_id })),
+                ),
+            }
+        }
+        ("POST", p) if p.starts_with("/skills/eval-loop/") && p.ends_with("/run") => {
+            let familiar_id = p
+                .trim_start_matches("/skills/eval-loop/")
+                .trim_end_matches("/run");
+            let track = body
+                .and_then(|b| serde_json::from_str::<serde_json::Value>(b).ok())
+                .and_then(|v| v.get("track").and_then(|t| t.as_str()).map(str::to_string))
+                .unwrap_or_else(|| "synthesis".to_string());
+            match crate::eval_loop::enqueue_run(coven_home, familiar_id, &track) {
+                Ok(spec) => json_response(202, &serde_json::json!({ "ok": true, "runId": spec.run_id, "track": spec.track })),
+                Err(err) => {
+                    let msg = err.to_string();
+                    if msg.contains("already in progress") {
+                        api_error(409, "run_in_progress", &msg, Some(serde_json::json!({ "familiarId": familiar_id })))
+                    } else if msg.contains("track must be") {
+                        api_error(400, "invalid_request", &msg, None)
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
+        }
         ("GET", p) if p == "/capabilities" || p.starts_with("/capabilities?") => {
             let refresh = query.map(|q| q.contains("refresh=1")).unwrap_or(false);
             let resp = crate::capabilities::get_all(coven_home, refresh);
