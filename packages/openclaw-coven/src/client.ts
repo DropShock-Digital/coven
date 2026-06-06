@@ -55,6 +55,7 @@ export type LaunchCovenSessionInput = {
   harness: string;
   prompt: string;
   title: string;
+  launchMode?: "interactive" | "nonInteractive" | "stream";
 };
 
 export interface CovenClient {

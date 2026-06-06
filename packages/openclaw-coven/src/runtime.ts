@@ -363,6 +363,7 @@ export class CovenAcpRuntime implements AcpRuntime {
           harness,
           prompt,
           title: titleFromPrompt(prompt),
+          launchMode: "nonInteractive",
         },
         input.signal,
       );

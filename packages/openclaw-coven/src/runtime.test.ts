@@ -248,6 +248,7 @@ describe("CovenAcpRuntime", () => {
         projectRoot: workspaceDir,
         cwd: workspaceDir,
         harness: "codex",
+        launchMode: "nonInteractive",
         prompt: "Fix tests",
       }),
       undefined,
@@ -280,15 +281,45 @@ describe("CovenAcpRuntime", () => {
     const client = fakeClient();
     const runtime = new CovenAcpRuntime({ config, client });
 
-    await expect(
-      runtime.ensureSession({
-        sessionKey: "agent:gemini:test",
-        agent: "gemini",
-        mode: "oneshot",
-        cwd: workspaceDir,
-      }),
-    ).rejects.toThrow(/Unknown or unauthorized ACP agent/);
+    for (const agent of ["gemini", "hermes", "hermes-agent"]) {
+      await expect(
+        runtime.ensureSession({
+          sessionKey: `agent:${agent}:test`,
+          agent,
+          mode: "oneshot",
+          cwd: workspaceDir,
+        }),
+      ).rejects.toThrow(/Unknown or unauthorized ACP agent/);
+    }
     expect(client.health).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit configured experimental harness mappings", async () => {
+    const client = fakeClient();
+    const runtime = new CovenAcpRuntime({
+      config: { ...config, harnesses: { "hermes-agent": "hermes" } },
+      client,
+    });
+    const handle = await runtime.ensureSession({
+      sessionKey: "agent:hermes-agent:test",
+      agent: "hermes-agent",
+      mode: "oneshot",
+      cwd: workspaceDir,
+    });
+
+    await collect(
+      runtime.runTurn({
+        handle,
+        text: "Fix tests",
+        mode: "prompt",
+        requestId: "req-1",
+      }),
+    );
+
+    expect(client.launchSession).toHaveBeenCalledWith(
+      expect.objectContaining({ harness: "hermes", launchMode: "nonInteractive" }),
+      undefined,
+    );
   });
 
   it("allows explicit configured agent-to-harness mappings", async () => {

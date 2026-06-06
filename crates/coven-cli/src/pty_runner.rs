@@ -79,7 +79,32 @@ pub fn build_harness_command_with_conversation(
     )?;
 
     Ok(HarnessCommand {
-        program: program.to_string(),
+        program,
+        args,
+        cwd: cwd.to_path_buf(),
+    })
+}
+
+pub fn build_registered_harness_command_with_conversation(
+    coven_home: &Path,
+    harness_id: &str,
+    prompt: &str,
+    cwd: &Path,
+    mode: crate::harness::HarnessLaunchMode,
+    conversation: Option<&crate::harness::ConversationHint>,
+    familiar: Option<&crate::harness::FamiliarContext>,
+) -> Result<HarnessCommand> {
+    let (program, args) = crate::harness::command_parts_for_registered_harness_with_conversation(
+        coven_home,
+        harness_id,
+        prompt,
+        mode,
+        conversation,
+        familiar,
+    )?;
+
+    Ok(HarnessCommand {
+        program,
         args,
         cwd: cwd.to_path_buf(),
     })

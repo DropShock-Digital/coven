@@ -87,6 +87,7 @@ pub struct CapabilitiesResponse {
 const CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
 
 struct CapabilityCache {
+    coven_home: PathBuf,
     manifests: HashMap<String, HarnessCapabilityManifest>,
     built_at: Instant,
 }
@@ -133,7 +134,7 @@ pub fn get_all(coven_home: &Path, refresh: bool) -> CapabilitiesResponse {
         let mut guard = cache().lock().unwrap_or_else(|e| e.into_inner());
         if !refresh {
             if let Some(ref c) = *guard {
-                if c.built_at.elapsed() < CACHE_TTL {
+                if c.coven_home == coven_home && c.built_at.elapsed() < CACHE_TTL {
                     let manifests: Vec<_> = c.manifests.values().cloned().collect();
                     let coven_skills =
                         crate::cockpit_sources::scan_skills(coven_home).unwrap_or_default();
@@ -151,7 +152,14 @@ pub fn get_all(coven_home: &Path, refresh: bool) -> CapabilitiesResponse {
         let mut manifests = HashMap::new();
         manifests.insert("codex".to_string(), codex);
         manifests.insert("claude".to_string(), claude);
+        for adapter in crate::harness::load_external_harness_specs(coven_home).unwrap_or_default() {
+            manifests.insert(
+                adapter.id.clone(),
+                external_adapter_capabilities(&adapter, utc_now_iso()),
+            );
+        }
         *guard = Some(CapabilityCache {
+            coven_home: coven_home.to_path_buf(),
             manifests,
             built_at: Instant::now(),
         });
@@ -192,6 +200,31 @@ pub fn invalidate() {
 }
 
 // ── Scanners ──────────────────────────────────────────────────────────────────
+
+fn external_adapter_capabilities(
+    adapter: &crate::harness::HarnessCommandSpec,
+    scanned_at: String,
+) -> HarnessCapabilityManifest {
+    HarnessCapabilityManifest {
+        harness_id: adapter.id.to_string(),
+        scanned_at,
+        global_instructions: GlobalInstructions {
+            present: false,
+            path: None,
+            byte_count: None,
+        },
+        skills: Vec::new(),
+        plugins: Vec::new(),
+        warnings: vec![CapabilityWarning {
+            kind: "external_adapter_manifest".to_string(),
+            path: adapter.id.clone(),
+            message: adapter
+                .compatibility_notes
+                .clone()
+                .unwrap_or_else(|| "External adapter manifest registered; no native capability scanner is available.".to_string()),
+        }],
+    }
+}
 
 fn dirs_home() -> PathBuf {
     std::env::var("HOME")

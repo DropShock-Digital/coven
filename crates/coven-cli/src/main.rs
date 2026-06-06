@@ -495,7 +495,7 @@ fn run_doctor() -> Result<()> {
         }
     }
 
-    println!("\nHarnesses:");
+    println!("\nDefault harnesses:");
     let harnesses = harness::built_in_harnesses();
     for harness in &harnesses {
         let status = if harness.available {
@@ -510,6 +510,26 @@ fn run_doctor() -> Result<()> {
         );
         if !harness.available {
             println!("       {}", harness.install_hint);
+        }
+    }
+
+    let external = harness::external_harnesses(&home)?;
+    if !external.is_empty() {
+        println!("\nExternal adapter manifests (explicit opt-in, not defaults):");
+        for harness in &external {
+            let status = if harness.available {
+                "ready"
+            } else {
+                "missing"
+            };
+            let marker = if harness.available { "OK" } else { "!!" };
+            println!(
+                "  [{marker}] {:<11} `{}` is {status}",
+                harness.label, harness.executable
+            );
+            if !harness.available {
+                println!("       {}", harness.install_hint);
+            }
         }
     }
 
@@ -721,16 +741,18 @@ fn choose_default_harness() -> Result<patch::HarnessId> {
 
 fn default_harness_id() -> Option<&'static str> {
     let harnesses = harness::built_in_harnesses();
-    harnesses
-        .iter()
-        .find(|h| h.id == "codex" && h.available)
-        .or_else(|| harnesses.iter().find(|h| h.id == "claude" && h.available))
-        .map(|h| h.id)
+    if harnesses.iter().any(|h| h.id == "codex" && h.available) {
+        return Some("codex");
+    }
+    if harnesses.iter().any(|h| h.id == "claude" && h.available) {
+        return Some("claude");
+    }
+    None
 }
 
 fn launch_patch_session(request: &patch::PatchRequest) -> Result<String> {
-    let selected_harness = selected_available_harness(request.harness_id.as_str())?;
     let coven_home = coven_home_dir()?;
+    let selected_harness = selected_available_harness(request.harness_id.as_str(), &coven_home)?;
     let store_path = coven_home.join(STORE_FILE_NAME);
     let conn = store::open_store(&store_path)?;
     let now = current_timestamp();
@@ -780,7 +802,7 @@ fn launch_patch_session(request: &patch::PatchRequest) -> Result<String> {
         &current_timestamp(),
     )?;
     let command = pty_runner::build_harness_command(
-        selected_harness.id,
+        &selected_harness.id,
         &brief,
         &request.repo.root,
         harness_launch_mode_for_stdio(),
@@ -960,7 +982,8 @@ fn run_session(
         anyhow::bail!("nothing to do: pass a prompt, or use --continue [ID] to resume a session");
     }
 
-    let selected_harness = selected_available_harness(harness_id)?;
+    let coven_home = coven_home_dir()?;
+    let selected_harness = selected_available_harness(harness_id, &coven_home)?;
     let current_dir = std::env::current_dir().context("failed to read current directory")?;
     let project_root = project::canonical_project_root(&current_dir).with_context(|| {
         format!(
@@ -969,7 +992,6 @@ fn run_session(
         )
     })?;
     let cwd = project::resolve_inside_root(&project_root, cwd).context("failed to resolve cwd")?;
-    let coven_home = coven_home_dir()?;
     let store_path = coven_store_path()?;
     let conn = store::open_store(&store_path)?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true);
@@ -989,9 +1011,7 @@ fn run_session(
     // clean. For harnesses without one (Codex), we prepend a bracketed identity
     // preamble to the prompt here so the integration layer remains harness-agnostic.
     let familiar_ctx = familiar_identity::resolve_optional(&coven_home, familiar_id)?;
-    let spec = harness::built_in_harness_specs()
-        .into_iter()
-        .find(|s| s.id == selected_harness.id);
+    let spec = harness::registered_harness_spec(&coven_home, &selected_harness.id)?;
     let effective_prompt = match (&familiar_ctx, spec.as_ref()) {
         (Some(f), Some(s)) if s.system_prompt_flag.is_none() && !expanded_prompt.is_empty() => {
             format!(
@@ -1090,7 +1110,7 @@ fn run_session(
         stream_json,
         &expanded_prompt,
         detach,
-        selected_harness.id,
+        &selected_harness.id,
     );
 
     if detach {
@@ -1228,8 +1248,9 @@ fn run_session(
         .as_ref()
         .filter(|s| s.system_prompt_flag.is_some())
         .and(familiar_ctx.as_ref());
-    let command = pty_runner::build_harness_command_with_conversation(
-        selected_harness.id,
+    let command = pty_runner::build_registered_harness_command_with_conversation(
+        &coven_home,
+        &selected_harness.id,
         &effective_prompt,
         &cwd,
         harness_launch_mode_for_stdio(),
@@ -1497,11 +1518,14 @@ fn ensure_successful_http_response(response: &str) -> Result<()> {
     }
 }
 
-fn selected_available_harness(harness_id: &str) -> Result<harness::HarnessSummary> {
-    let harnesses = harness::built_in_harnesses();
+fn selected_available_harness(
+    harness_id: &str,
+    coven_home: &Path,
+) -> Result<harness::HarnessSummary> {
+    let harnesses = harness::registered_harnesses(coven_home)?;
     let known_harnesses = harnesses
         .iter()
-        .map(|harness| harness.id)
+        .map(|harness| harness.id.as_str())
         .collect::<Vec<_>>()
         .join(", ");
     let selected = harnesses
@@ -1516,7 +1540,7 @@ fn selected_available_harness(harness_id: &str) -> Result<harness::HarnessSummar
             harness.install_hint
         )),
         None => Err(anyhow!(
-            "unknown harness `{harness_id}`. Built-in harnesses: {known_harnesses}"
+            "unknown harness `{harness_id}`. Registered harnesses: {known_harnesses}"
         )),
     }
 }

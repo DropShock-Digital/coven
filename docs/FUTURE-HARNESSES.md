@@ -61,9 +61,11 @@ A Hermes adapter probably should not be a direct copy of the Codex/Claude shape.
 
 ## Decision
 
-Do not add Hermes to `coven doctor` or `coven run` yet.
+Do not add Hermes to Coven's built-in/default adapter table, natural default fallback, or first-party Cast slash commands yet.
 
-For now, keep the adapter seam able to express prefix-arg CLIs (`chat -q <prompt>`) and revisit the actual Hermes adapter as an external adapter after:
+Hermes can be tested through the external adapter manifest path after a maintainer/operator creates `<COVEN_HOME>/harness-adapters/hermes.toml`. In that state, `coven doctor` may report Hermes under external adapter manifests and `coven run hermes ...` is an explicit, manifest-gated launch. This is not the same as public built-in support.
+
+For now, keep Hermes experimental until:
 
 - direct Coven Codex/Claude sessions have been used more;
 - CastCodes-facing attach/open or lane replay has had real usage;

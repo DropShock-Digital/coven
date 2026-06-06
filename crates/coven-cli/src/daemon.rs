@@ -158,14 +158,26 @@ impl SessionRuntime for LiveSessionRuntime {
             }
             (None, None) => None,
         };
-        let command = pty_runner::build_harness_command_with_conversation(
-            &launch.harness,
-            &launch.prompt,
-            Path::new(&launch.cwd),
-            launch.launch_mode,
-            launch.conversation.as_ref(),
-            familiar_ctx.as_ref(),
-        )?;
+        let command = if let Some(coven_home) = &self.coven_home {
+            pty_runner::build_registered_harness_command_with_conversation(
+                coven_home,
+                &launch.harness,
+                &launch.prompt,
+                Path::new(&launch.cwd),
+                launch.launch_mode,
+                launch.conversation.as_ref(),
+                familiar_ctx.as_ref(),
+            )?
+        } else {
+            pty_runner::build_harness_command_with_conversation(
+                &launch.harness,
+                &launch.prompt,
+                Path::new(&launch.cwd),
+                launch.launch_mode,
+                launch.conversation.as_ref(),
+                familiar_ctx.as_ref(),
+            )?
+        };
         let observer = self
             .coven_home
             .as_ref()

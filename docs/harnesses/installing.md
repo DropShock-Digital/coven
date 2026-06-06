@@ -32,7 +32,7 @@ The daemon revalidates the harness id on every launch request. Clients cannot wi
 | `codex` | `codex` | `npm install -g @openai/codex` | `codex login` | [Codex harness](/harnesses/codex) |
 | `claude` | `claude` | `npm install -g @anthropic-ai/claude-code` | `claude doctor` | [Claude Code harness](/harnesses/claude-code) |
 
-Other CLIs (Hermes, Aider, Gemini CLI, Cline, custom commands) are **not** part of v0. See [Future harness notes](/FUTURE-HARNESSES) for the adapter direction.
+Other CLIs (Hermes, Aider, Gemini CLI, Cline, custom commands) are **not** part of the default v0 adapter set. Maintainers can test a candidate through an explicit external manifest under `<COVEN_HOME>/harness-adapters/*.toml`; see [Harness adapters](/HARNESS-ADAPTERS) and [Future harness notes](/FUTURE-HARNESSES). Manifest-gated adapters are opt-in experiments, not default public support.
 
 ## Step-by-step install
 

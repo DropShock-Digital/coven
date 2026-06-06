@@ -1239,7 +1239,9 @@ impl App {
             .map(|root| root.display().to_string())
             .unwrap_or_else(|| "not inside a git/project root yet".to_string());
         let store_path = self.coven_home.clone().unwrap_or_else(coven_home_dir);
-        let harnesses = harness::built_in_harnesses();
+        let default_harnesses = harness::built_in_harnesses();
+        let harnesses = harness::registered_harnesses(&store_path)
+            .unwrap_or_else(|_| default_harnesses.clone());
         let mut lines = vec![
             "Doctor".to_string(),
             format!("  Store    {}", store_path.display()),
@@ -1257,10 +1259,10 @@ impl App {
                 harness.label, harness.executable
             ));
         }
-        let next = harnesses
+        let next = default_harnesses
             .iter()
             .find(|harness| harness.id == "codex" && harness.available)
-            .or_else(|| harnesses.iter().find(|harness| harness.available))
+            .or_else(|| default_harnesses.iter().find(|harness| harness.available))
             .map(|harness| {
                 format!(
                     "  Next     coven run {} \"explain this repo in 5 bullets\"",

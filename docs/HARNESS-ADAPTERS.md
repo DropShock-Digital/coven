@@ -35,17 +35,37 @@ The current implementation expects the prompt to be the final command argument a
 
 New harnesses should not be added as one-off special cases across the daemon, TUI, docs, OpenClaw plugin, and package READMEs. Add a reusable adapter description first, then wire the daemon and clients against that description.
 
-For now, a code-backed adapter still lands in this repo, but it should be shaped as data plus narrow translation functions. The direction is an external adapter registry/manifest that can describe:
+Coven now has a generic **external adapter manifest** path for explicit opt-in experiments:
 
+```text
+<COVEN_HOME>/harness-adapters/<id>.toml
+```
+
+A manifest can describe:
+
+- `schema = "coven.harness-adapter.v1"`;
 - `id`, `label`, and `executable`;
 - detection and setup hints;
-- interactive, one-shot, and optional stream/resume argv;
-- whether the adapter supports preassigned upstream session ids;
-- whether the adapter has a dedicated system-prompt/identity flag;
-- output expectations and known unsupported modes; and
-- client compatibility notes for OpenClaw, CastCodes, and other consumers.
+- interactive and one-shot argv prefixes;
+- whether the adapter has a dedicated system-prompt/identity flag; and
+- compatibility notes for OpenClaw, CastCodes, and other consumers.
 
-Do not promote a harness to public support by only adding it to `built_in_harness_specs()`. That makes the UI and docs look supported before the adapter contract is proven.
+Generic external manifests are one-shot argv adapters today: Coven appends the prompt as the final argument, never shells out through a user-provided command string, and does not grant stream/resume support to manifest adapters yet. A manifest must live under trusted `COVEN_HOME`; project-local manifests are intentionally not loaded.
+
+Do not promote a harness to public support by only adding it to `built_in_harness_specs()` or by adding scattered string checks. That makes the UI and docs look supported before the adapter contract is proven.
+
+### External manifest example
+
+```toml
+schema = "coven.harness-adapter.v1"
+id = "example-agent"
+label = "Example Agent"
+executable = "example-agent"
+interactive_prompt_prefix_args = ["chat", "-q"]
+non_interactive_prompt_prefix_args = ["chat", "--quiet", "-q"]
+install_hint = "Install example-agent and authenticate with its own setup command."
+compatibility_notes = "One-shot argv mode only; not a default adapter."
+```
 
 ## Current default adapters
 

@@ -387,7 +387,7 @@ fn launch_session(
             return api_error(400, "invalid_request", &error.to_string(), None);
         }
     };
-    let mut launch = match session_launch_from_payload(payload) {
+    let mut launch = match session_launch_from_payload(coven_home, payload) {
         Ok(launch) => launch,
         Err(error) => {
             return api_error(400, "invalid_request", &error.to_string(), None);
@@ -462,7 +462,7 @@ fn launch_session(
     json_response(201, &record)
 }
 
-fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
+fn session_launch_from_payload(coven_home: &Path, payload: Value) -> Result<SessionLaunch> {
     let project_root = required_string(&payload, "projectRoot")?;
     let cwd = payload.get("cwd").and_then(Value::as_str);
     let canonical_project_root = project::canonical_project_root(Path::new(&project_root))
@@ -473,11 +473,11 @@ fn session_launch_from_payload(payload: Value) -> Result<SessionLaunch> {
     // instead of letting the runtime's arg builder surface it later as a
     // 500. Bonus: rejecting here means we never insert a session row for
     // a launch that can't possibly succeed.
-    let supported: Vec<&'static str> = crate::harness::built_in_harness_specs()
+    let supported: Vec<String> = crate::harness::registered_harness_specs(coven_home)?
         .into_iter()
         .map(|spec| spec.id)
         .collect();
-    if !supported.iter().any(|id| *id == harness) {
+    if !supported.iter().any(|id| id == &harness) {
         anyhow::bail!(
             "harness `{harness}` is not a supported harness; expected one of {supported:?}"
         );
@@ -1978,6 +1978,52 @@ mod tests {
     }
 
     #[test]
+    fn launch_request_with_registered_external_manifest_harness_reaches_runtime(
+    ) -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let project_root = temp_dir.path().join("repo");
+        std::fs::create_dir_all(&project_root)?;
+        let adapter_dir = temp_dir.path().join("harness-adapters");
+        std::fs::create_dir_all(&adapter_dir)?;
+        std::fs::write(
+            adapter_dir.join("hermes.toml"),
+            r#"schema = "coven.harness-adapter.v1"
+id = "hermes"
+label = "Hermes Agent"
+executable = "hermes"
+interactive_prompt_prefix_args = ["chat", "--source", "coven", "-q"]
+non_interactive_prompt_prefix_args = ["chat", "--source", "coven", "-Q", "-q"]
+"#,
+        )?;
+        let runtime = RecordingRuntime::default();
+        let body = json!({
+            "projectRoot": project_root,
+            "harness": "hermes",
+            "launchMode": "nonInteractive",
+            "prompt": "hello"
+        })
+        .to_string();
+
+        let response = handle_request_with_runtime(
+            "POST",
+            "/sessions",
+            temp_dir.path(),
+            None,
+            Some(&body),
+            &runtime,
+        )?;
+
+        assert_eq!(response.status, 201, "body: {}", response.body);
+        assert_eq!(runtime.launches.borrow().len(), 1);
+        assert_eq!(runtime.launches.borrow()[0].harness, "hermes");
+        assert_eq!(
+            runtime.launches.borrow()[0].launch_mode,
+            HarnessLaunchMode::NonInteractive
+        );
+        Ok(())
+    }
+
+    #[test]
     fn launch_request_with_unknown_harness_returns_400_upfront_no_session_row() -> anyhow::Result<()>
     {
         let temp_dir = tempfile::tempdir()?;
@@ -1986,7 +2032,7 @@ mod tests {
         let runtime = RecordingRuntime::default();
         let body = json!({
             "projectRoot": project_root,
-            "harness": "hermes",
+            "harness": "attacker-harness",
             "launchMode": "nonInteractive",
             "prompt": "hello"
         })
