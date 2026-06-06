@@ -154,6 +154,13 @@ pub(super) struct App {
     /// newline-terminated lines.
     stream_json_buffers: HashMap<String, String>,
     client: Box<dyn ChatClient>,
+    /// Optional familiar id for the session owner (e.g. `"sage"`). When set,
+    /// delegation events are emitted to `cave-coven-calls.json` whenever
+    /// this chat dispatches a harness task to another familiar.
+    familiar_id: Option<String>,
+    /// Coven call id of the currently-running delegation, if one was emitted.
+    /// Cleared when the associated session reaches a terminal event.
+    active_call_id: Option<String>,
 }
 
 /// Outcome of a Ctrl+C press routed through [`App::handle_interrupt`].
@@ -330,6 +337,8 @@ impl App {
             suppressed_session_ids: HashSet::new(),
             harness_stream_session_ids: HashMap::new(),
             stream_json_buffers: HashMap::new(),
+            familiar_id: None,
+            active_call_id: None,
             client,
         };
 
@@ -796,6 +805,23 @@ impl App {
                             plan_harness.harness.label(),
                             &session.id,
                         ));
+                    }
+                    // Emit a delegation event when this chat is running as a familiar.
+                    if let (Some(home), Some(caller_id)) =
+                        (self.coven_home.as_deref(), self.familiar_id.as_deref())
+                    {
+                        match crate::coven_calls::emit_running(
+                            home,
+                            caller_id,
+                            "unknown", // callee resolution is a TODO once delegation routing is wired
+                            prompt,
+                            Some(&session.id),
+                        ) {
+                            Ok(call_id) => self.active_call_id = Some(call_id),
+                            Err(_err) => {
+                                // Non-fatal: delegation event failures must never block the chat.
+                            }
+                        }
                     }
                 }
             }
@@ -1614,6 +1640,27 @@ impl App {
                 let status =
                     event_payload_text(event, "status").unwrap_or_else(|| "exited".to_string());
                 self.is_responding = false;
+                // Resolve the delegation call status from the session exit status.
+                if let (Some(call_id), Some(home)) =
+                    (self.active_call_id.take(), self.coven_home.as_deref())
+                {
+                    let call_status = if status == "0" || status == "success" {
+                        crate::coven_calls::CovenCallStatus::Completed
+                    } else {
+                        crate::coven_calls::CovenCallStatus::Failed
+                    };
+                    let ended_at =
+                        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    if let Err(_err) = crate::coven_calls::emit_terminal(
+                        home,
+                        &call_id,
+                        call_status,
+                        &ended_at,
+                        None,
+                    ) {
+                        // Non-fatal.
+                    }
+                }
                 if self.active_session_id.as_deref() == Some(event.session_id.as_str()) {
                     self.active_session_id = None;
                     self.active_session_harness = None;
@@ -1631,6 +1678,22 @@ impl App {
             }
             "kill" => {
                 self.flush_pending_agent_buffer();
+                // Delegation call was cancelled by a kill event.
+                if let (Some(call_id), Some(home)) =
+                    (self.active_call_id.take(), self.coven_home.as_deref())
+                {
+                    let ended_at =
+                        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    if let Err(_err) = crate::coven_calls::emit_terminal(
+                        home,
+                        &call_id,
+                        crate::coven_calls::CovenCallStatus::Cancelled,
+                        &ended_at,
+                        None,
+                    ) {
+                        // Non-fatal.
+                    }
+                }
                 if self.active_session_id.as_deref() == Some(event.session_id.as_str()) {
                     self.active_session_id = None;
                     self.active_session_harness = None;

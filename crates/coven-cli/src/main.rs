@@ -16,6 +16,7 @@ mod api;
 mod capabilities;
 mod cockpit_sources;
 mod control_plane;
+mod coven_calls;
 mod daemon;
 mod encrypted_artifacts;
 mod eval_loop;
