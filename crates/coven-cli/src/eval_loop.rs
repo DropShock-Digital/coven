@@ -110,8 +110,7 @@ pub fn get_eval_loop_state(
         Ok(raw) => raw,
         Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
-            return Err(err)
-                .with_context(|| format!("failed to read {}", tsv_path.display()))
+            return Err(err).with_context(|| format!("failed to read {}", tsv_path.display()))
         }
     };
 
@@ -154,11 +153,7 @@ pub fn get_eval_loop_state(
 /// the iteration. The daemon does not run the loop directly.
 ///
 /// Returns `Err` if a run is already in progress (lock file exists).
-pub fn enqueue_run(
-    coven_home: &Path,
-    familiar_id: &str,
-    track: &str,
-) -> Result<RunSpec> {
+pub fn enqueue_run(coven_home: &Path, familiar_id: &str, track: &str) -> Result<RunSpec> {
     let track = validate_track(track)?;
     let workspace = familiar_workspace(coven_home, familiar_id);
     let eval_dir = workspace.join(EVAL_LOOP_DIR);
@@ -181,8 +176,7 @@ pub fn enqueue_run(
     // Write spec first, then lock — the familiar watches for lock disappearance
     // to know a run completed. Atomic enough: both are small local writes.
     let spec_path = eval_dir.join(RUN_SPEC_FILE);
-    let spec_json =
-        serde_json::to_string_pretty(&spec).context("failed to serialize run spec")?;
+    let spec_json = serde_json::to_string_pretty(&spec).context("failed to serialize run spec")?;
     fs::write(&spec_path, &spec_json)
         .with_context(|| format!("failed to write run spec at {}", spec_path.display()))?;
 
@@ -195,25 +189,27 @@ pub fn enqueue_run(
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 fn familiar_workspace(coven_home: &Path, familiar_id: &str) -> PathBuf {
-    // Convention: ~/.coven/familiars/<id>/
-    // This matches where familiars store their workspace data.
-    // If a TOML `workspace` field is added later, resolve it here.
-    coven_home.join("familiars").join(familiar_id)
+    // Prefer the explicit `workspace` path declared in familiars.toml when present.
+    // Falls back to the conventional `~/.coven/familiars/<id>/` path.
+    crate::cockpit_sources::read_familiars(coven_home)
+        .ok()
+        .and_then(|familiars| {
+            familiars
+                .into_iter()
+                .find(|f| f.id == familiar_id)
+                .and_then(|f| f.workspace)
+        })
+        .unwrap_or_else(|| coven_home.join("familiars").join(familiar_id))
 }
 
 fn is_running(workspace: &Path) -> bool {
-    workspace
-        .join(EVAL_LOOP_DIR)
-        .join(RUN_LOCK_FILE)
-        .exists()
+    workspace.join(EVAL_LOOP_DIR).join(RUN_LOCK_FILE).exists()
 }
 
 fn validate_track(track: &str) -> Result<&str> {
     match track {
         "synthesis" | "prompt" | "memory" => Ok(track),
-        other => anyhow::bail!(
-            "track must be `synthesis`, `prompt`, or `memory`, got `{other}`"
-        ),
+        other => anyhow::bail!("track must be `synthesis`, `prompt`, or `memory`, got `{other}`"),
     }
 }
 
@@ -271,6 +267,7 @@ fn parse_results_tsv(raw: &str) -> Vec<LoopIterationDto> {
 mod tests {
     use super::*;
 
+    #[allow(clippy::too_many_arguments)]
     fn tsv_line(
         ts: &str,
         track: &str,
@@ -350,9 +347,36 @@ mod tests {
         fs::create_dir_all(&workspace).unwrap();
         let tsv = format!(
             "{}{}{}",
-            tsv_line("2026-06-05T10:00:00Z", "synthesis", 1, "S1", 0.60, 0.68, 0.08, "ACCEPT"),
-            tsv_line("2026-06-05T11:00:00Z", "prompt",    2, "P1", 0.55, 0.50, -0.05, "REVERT"),
-            tsv_line("2026-06-05T12:00:00Z", "memory",    3, "M1", 0.70, 0.74, 0.04, "ACCEPT"),
+            tsv_line(
+                "2026-06-05T10:00:00Z",
+                "synthesis",
+                1,
+                "S1",
+                0.60,
+                0.68,
+                0.08,
+                "ACCEPT"
+            ),
+            tsv_line(
+                "2026-06-05T11:00:00Z",
+                "prompt",
+                2,
+                "P1",
+                0.55,
+                0.50,
+                -0.05,
+                "REVERT"
+            ),
+            tsv_line(
+                "2026-06-05T12:00:00Z",
+                "memory",
+                3,
+                "M1",
+                0.70,
+                0.74,
+                0.04,
+                "ACCEPT"
+            ),
         );
         fs::write(workspace.join(RESULTS_TSV), tsv).unwrap();
 
@@ -434,5 +458,59 @@ mod tests {
         assert!(validate_track("").is_err());
         assert!(validate_track("harness").is_err());
         assert!(validate_track("SYNTHESIS").is_err()); // case-sensitive
+    }
+}
+
+#[cfg(test)]
+mod workspace_resolution_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn uses_toml_workspace_field_when_set() {
+        let temp = tempfile::tempdir().unwrap();
+        let custom_ws = temp.path().join("custom-ws");
+        fs::create_dir_all(&custom_ws).unwrap();
+
+        let toml = format!(
+            "[[familiar]]\nid = \"sage\"\ndisplay_name = \"Sage\"\nrole = \"Research\"\ndescription = \"Reads.\"\nworkspace = \"{}\"\n",
+            custom_ws.display()
+        );
+        fs::write(temp.path().join("familiars.toml"), toml).unwrap();
+
+        let resolved = familiar_workspace(temp.path(), "sage");
+        assert_eq!(resolved, custom_ws, "should use TOML workspace path");
+    }
+
+    #[test]
+    fn falls_back_to_convention_when_no_workspace_field() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("familiars.toml"),
+            "[[familiar]]\nid = \"sage\"\ndisplay_name = \"Sage\"\nrole = \"R\"\ndescription = \"D\"\n",
+        ).unwrap();
+
+        let resolved = familiar_workspace(temp.path(), "sage");
+        assert_eq!(resolved, temp.path().join("familiars").join("sage"));
+    }
+
+    #[test]
+    fn falls_back_to_convention_when_toml_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let resolved = familiar_workspace(temp.path(), "sage");
+        assert_eq!(resolved, temp.path().join("familiars").join("sage"));
+    }
+
+    #[test]
+    fn unknown_familiar_uses_convention_path() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("familiars.toml"),
+            "[[familiar]]\nid = \"nova\"\ndisplay_name = \"Nova\"\nrole = \"Queen\"\ndescription = \"Orchestrates.\"\n",
+        ).unwrap();
+
+        // sage is not in the TOML — should still get a sensible conventional path
+        let resolved = familiar_workspace(temp.path(), "sage");
+        assert_eq!(resolved, temp.path().join("familiars").join("sage"));
     }
 }
