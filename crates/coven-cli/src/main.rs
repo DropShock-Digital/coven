@@ -18,6 +18,7 @@ mod cockpit_sources;
 mod control_plane;
 mod daemon;
 mod encrypted_artifacts;
+mod eval_loop;
 mod harness;
 mod openclaw_repo;
 mod patch;
