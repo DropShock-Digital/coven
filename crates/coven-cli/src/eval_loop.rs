@@ -267,6 +267,7 @@ fn parse_results_tsv(raw: &str) -> Vec<LoopIterationDto> {
 mod tests {
     use super::*;
 
+    #[allow(clippy::too_many_arguments)]
     fn tsv_line(
         ts: &str,
         track: &str,
