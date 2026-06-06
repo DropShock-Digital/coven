@@ -33,6 +33,10 @@ pub struct FamiliarDto {
     pub last_seen: String,
     pub active_sessions: u32,
     pub memory_freshness: String,
+    /// Explicit workspace path declared in familiars.toml. `None` means
+    /// the daemon uses the conventional `~/.coven/familiars/<id>/` path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workspace: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,6 +59,10 @@ struct FamiliarEntry {
     description: String,
     pronouns: Option<String>,
     active_channel: Option<String>,
+    /// Explicit workspace path for this familiar. When set, the daemon uses this
+    /// instead of the conventional `~/.coven/familiars/<id>/` path.
+    /// Accepts `~` expansion. Optional — most familiars do not need to set this.
+    workspace: Option<String>,
 }
 
 pub fn read_familiars(coven_home: &Path) -> Result<Vec<FamiliarDto>> {
@@ -93,6 +101,18 @@ pub fn read_familiars(coven_home: &Path) -> Result<Vec<FamiliarDto>> {
             last_seen: "—".to_string(),
             active_sessions: 0,
             memory_freshness,
+            workspace: entry.workspace.map(|p| {
+                // Expand leading ~ to home directory
+                if let Some(rest) = p.strip_prefix("~/") {
+                    dirs_next::home_dir()
+                        .map(|home| home.join(rest))
+                        .unwrap_or_else(|| std::path::PathBuf::from(&p))
+                } else if p == "~" {
+                    dirs_next::home_dir().unwrap_or_else(|| std::path::PathBuf::from(&p))
+                } else {
+                    std::path::PathBuf::from(p)
+                }
+            }),
             id: entry.id,
         });
     }
@@ -585,6 +605,7 @@ description = "..."
             last_seen: "—".to_string(),
             active_sessions: 0,
             memory_freshness: "—".to_string(),
+            workspace: None,
         };
         let json = serde_json::to_string(&dto_without)?;
         assert!(

@@ -195,10 +195,17 @@ pub fn enqueue_run(
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 fn familiar_workspace(coven_home: &Path, familiar_id: &str) -> PathBuf {
-    // Convention: ~/.coven/familiars/<id>/
-    // This matches where familiars store their workspace data.
-    // If a TOML `workspace` field is added later, resolve it here.
-    coven_home.join("familiars").join(familiar_id)
+    // Prefer the explicit `workspace` path declared in familiars.toml when present.
+    // Falls back to the conventional `~/.coven/familiars/<id>/` path.
+    crate::cockpit_sources::read_familiars(coven_home)
+        .ok()
+        .and_then(|familiars| {
+            familiars
+                .into_iter()
+                .find(|f| f.id == familiar_id)
+                .and_then(|f| f.workspace)
+        })
+        .unwrap_or_else(|| coven_home.join("familiars").join(familiar_id))
 }
 
 fn is_running(workspace: &Path) -> bool {
@@ -434,5 +441,60 @@ mod tests {
         assert!(validate_track("").is_err());
         assert!(validate_track("harness").is_err());
         assert!(validate_track("SYNTHESIS").is_err()); // case-sensitive
+    }
+
+}
+
+#[cfg(test)]
+mod workspace_resolution_tests {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn uses_toml_workspace_field_when_set() {
+        let temp = tempfile::tempdir().unwrap();
+        let custom_ws = temp.path().join("custom-ws");
+        fs::create_dir_all(&custom_ws).unwrap();
+
+        let toml = format!(
+            "[[familiar]]\nid = \"sage\"\ndisplay_name = \"Sage\"\nrole = \"Research\"\ndescription = \"Reads.\"\nworkspace = \"{}\"\n",
+            custom_ws.display()
+        );
+        fs::write(temp.path().join("familiars.toml"), toml).unwrap();
+
+        let resolved = familiar_workspace(temp.path(), "sage");
+        assert_eq!(resolved, custom_ws, "should use TOML workspace path");
+    }
+
+    #[test]
+    fn falls_back_to_convention_when_no_workspace_field() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("familiars.toml"),
+            "[[familiar]]\nid = \"sage\"\ndisplay_name = \"Sage\"\nrole = \"R\"\ndescription = \"D\"\n",
+        ).unwrap();
+
+        let resolved = familiar_workspace(temp.path(), "sage");
+        assert_eq!(resolved, temp.path().join("familiars").join("sage"));
+    }
+
+    #[test]
+    fn falls_back_to_convention_when_toml_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let resolved = familiar_workspace(temp.path(), "sage");
+        assert_eq!(resolved, temp.path().join("familiars").join("sage"));
+    }
+
+    #[test]
+    fn unknown_familiar_uses_convention_path() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(
+            temp.path().join("familiars.toml"),
+            "[[familiar]]\nid = \"nova\"\ndisplay_name = \"Nova\"\nrole = \"Queen\"\ndescription = \"Orchestrates.\"\n",
+        ).unwrap();
+
+        // sage is not in the TOML — should still get a sensible conventional path
+        let resolved = familiar_workspace(temp.path(), "sage");
+        assert_eq!(resolved, temp.path().join("familiars").join("sage"));
     }
 }
