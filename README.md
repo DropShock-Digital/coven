@@ -1,310 +1,96 @@
+# Coven
 
-<!-- README-ROAST:START -->
+![Repo type](https://img.shields.io/badge/type-media%20workflow%20delivery%20tool-0f172a) ![Status](https://img.shields.io/badge/status-prototype-2563eb) ![Docs](https://img.shields.io/badge/docs-rich%20README-7c3aed) ![Visibility](https://img.shields.io/badge/visibility-public-16a34a)
 
-## README Roast Pass
+Local harness substrate for project-scoped agent sessions.
 
-Roasted with [https://github.com/hidai25/readme-roast](https://github.com/hidai25/readme-roast) on 2026-06-25. This block is evidence-only: repo metadata, root files, and the existing README were scanned before writing.
-
-### Fast roast
-
-- Pre-pass README score: **82/100** by the readme-roast categories: first impression, install friction, trust, visuals, and structure.
-- No clear H1 hero near the top.
-- Biggest fix in this pass: added a Mermaid repo map plus a quick operator scan without deleting the existing README content.
-
-### Mermaid repository map
-
-```mermaid
-flowchart TD
-  R["DropShock-Digital/coven"]
-  R --> N1["Cargo.toml"]
-  R --> N2["README.md"]
-  R --> N3["packages/"]
-  R --> N4["docs/"]
-  R --> N5["scripts/"]
-  R --> N6["web/"]
-  R --> N7["assets/"]
-  R --> N8["brand/"]
-  R --> N9["crates/"]
-  R --> N10["npm/"]
-  R --> N11["skills/"]
-  R --> N12["specs/"]
-  R --> MORE["additional repo files"]
-```
-
-### Operator quick scan
-
-| Signal | Evidence |
-|---|---|
-| GitHub repo | [DropShock-Digital/coven](https://github.com/DropShock-Digital/coven) |
-| Description | Local harness substrate for project-scoped agent sessions. |
-| Default branch | `main` |
-| Primary languages | Rust 86%, TypeScript 7%, JavaScript 2%, HTML 2%, Python 1% |
-| Install path | `cargo fetch` |
-| Run/build hint | Not detected from root files |
-| Key files scanned | Cargo.toml, README.md, packages/, docs/, scripts/, web/ |
-
-### README next upgrades
-
-- Add real screenshots, GIFs, or CLI output once the repo has a stable demo path.
-- Pin exact setup commands after verifying them in a clean environment.
-- Link production/staging/docs only when the URL is durable and intended for readers.
-
-<!-- README-ROAST:END -->
-
-<p align="center">
-  <img src="assets/opencoven/opencoven.svg" alt="OpenCoven logo" width="128" height="128">
-</p>
-
-<h1 align="center">OpenCoven / Coven</h1>
-
-<h3 align="center">Project-scoped harness sessions for the OpenCoven ecosystem</h3>
-
-<p align="center">
-  Run Codex, Claude Code, and future harnesses inside explicit local project boundaries.<br/>
-  Launch, observe, attach, and coordinate agent work through one neutral runtime substrate.
-</p>
-
-<p align="center">
-  OpenCoven turns AI from a blank chatbox into a living workspace of agents that remember, coordinate, and belong to you.
-</p>
-
-<p align="center">
-  <a href="https://github.com/OpenCoven/coven/issues"><strong>Issues</strong></a>
-  ·
-  <a href="https://discord.gg/opencoven"><strong>Discord</strong></a>
-  ·
-  <a href="https://x.com/OpenCvn"><strong>@OpenCvn</strong></a>
-</p>
+Built and maintained by **DropShock Digital**.
 
 ---
 
-## Install
+## First screen
 
-Coven is still an early local-first MVP, but the npm wrapper is live for supported platforms. The user-facing command is always `coven`.
+| Area | Detail |
+| --- | --- |
+| Repository | [`DropShock-Digital/coven`](https://github.com/DropShock-Digital/coven) |
+| Primary class | media workflow / delivery tool |
+| Current posture | prototype |
+| Default branch | `main` |
+| Visibility | public |
+| Last README standardization | 2026-06-26 |
 
-Try the published package:
+## What matters
 
-```sh
-npx @opencoven/cli doctor
-pnpm dlx @opencoven/cli doctor
+- Make the repo purpose obvious in the first 30 seconds.
+- Put the architecture or workflow in a visual map before deep prose.
+- Keep commands, environment notes, and handoff risks close to the top.
+- Credit the real builder/maintainer while keeping client or project context separate from implementation notes.
+- Audit priority: `P1`
+
+## System map
+
+```mermaid
+flowchart TD
+    A["Raw media / source files"] --> B["Repo workflow"]
+    B --> C["Rename, package, transform, or transcribe"]
+    C --> D["Reviewable output"]
+    D --> E["Delivery / archive"]
+    B --> F["Operator notes + safeguards"]
 ```
 
-Or build from source:
 
-```sh
-git clone https://github.com/OpenCoven/coven.git
-cd coven
-cargo build --workspace
-cargo run -p coven-cli -- doctor
+### Visual proof
+
+![Opencoven Logo](brand/logo/opencoven-logo.svg)
+
+![Opencoven Mark](brand/logo/opencoven-mark.svg)
+
+![Opencoven](assets/opencoven/opencoven.svg)
+
+## Best features carried forward
+
+- Visual-first GitHub Markdown is kept, but constrained to one clear hero/asset lane.
+- Existing Mermaid thinking is preserved and moved near the top as the system map.
+- Existing setup intent is kept and reframed as a short operator path.
+- Architecture language is retained but converted into a skimmable diagram-first explanation.
+- Input → processing → output is treated as the core story, not buried in prose.
+
+## Operate this repo
+
+**Detected stack:** No package/deploy metadata detected yet
+
+```bash
+# Add verified setup/run commands here.
 ```
 
-The release workflow publishes `@opencoven/cli` plus native packages for macOS Apple Silicon, glibc-based Linux x64, and Windows x64. Check npm for the current `latest` tag before making version-specific claims.
+> Commands above are inferred from repository files and should be verified before they become release or client handoff instructions.
 
-## Quick Start
+## Documentation map
 
-New to Coven? Run the interactive menu first:
+- [`.github/ISSUE_TEMPLATE/bug-sessions-cache.md`](.github/ISSUE_TEMPLATE/bug-sessions-cache.md)
+- [`.github/pull_request_template.md`](.github/pull_request_template.md)
+- [`CONTRIBUTING.md`](CONTRIBUTING.md)
+- [`LICENSE`](LICENSE)
+- [`SECURITY.md`](SECURITY.md)
+- [`docs/AGENTS.md`](docs/AGENTS.md)
+- [`docs/API-CONTRACT.md`](docs/API-CONTRACT.md)
+- [`docs/API.md`](docs/API.md)
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)
+- [`docs/AUTH.md`](docs/AUTH.md)
+- [`docs/BRAND.md`](docs/BRAND.md)
+- [`docs/BRANDING-ADHERENCE.md`](docs/BRANDING-ADHERENCE.md)
+- [`docs/CASTCODES-INTEGRATION.md`](docs/CASTCODES-INTEGRATION.md)
+- [`docs/CLIENT-INTEGRATION.md`](docs/CLIENT-INTEGRATION.md)
 
-```sh
-coven
-# or explicitly:
-coven tui
-```
+## Handoff notes
 
-The menu starts with **Start here**, checks your local setup, and shows the safest first command to try.
+| Area | Detail |
+| --- | --- |
+| Secrets | No `.env.example` was detected; add one before documenting environment-specific setup. |
+| License | License file detected. |
+| Owner credit | Built and maintained by DropShock Digital. |
+| Next documentation move | Add `docs/OPERATIONS.md` for runbooks, monitoring, recovery, and common failures. |
 
-Prefer copy/paste commands?
+## Maintenance standard
 
-```sh
-cd /path/to/your/project
-coven doctor
-coven daemon start
-coven daemon restart
-coven run codex "fix the failing tests"
-coven run claude "polish this UI"
-coven sessions
-coven sessions --all
-coven sessions --plain
-coven sessions --json
-```
-
-`coven doctor` checks whether supported local harness CLIs are available. `coven run` creates a project-scoped session record, validates the working directory, and launches the selected harness through Coven-managed PTY execution. In a terminal, `coven sessions` opens a human session browser where you can select work and choose visible actions like **Rejoin**, **View Log**, **Summon**, **Archive**, and **Sacrifice** without copying IDs; use `--plain` for scripts or `--json` for client discovery.
-
-Coven also provides a rescue loop for OpenClaw contributors and users:
-
-```sh
-coven patch openclaw
-```
-
-If OpenClaw breaks, Coven gives you a predictable repair room: choose a repo, choose a harness, get a verified patch.
-
-## What it does
-
-Coven is the local harness substrate for OpenCoven. It does not replace your coding agent, your UI, or OpenClaw. It gives them a shared room where project work can happen visibly and safely.
-
-OpenCoven is an open ecosystem for persistent AI familiars: named agents with memory, tools, identity, roles, and continuity. Coven provides the local runtime layer for that vision: project-scoped sessions, harness-neutral execution, inspectable history, and explicit authority boundaries.
-
-- **Project-root boundaries** — every launch is tied to an explicit repository/project root.
-- **Harness-neutral runtime** — v0 focuses on Codex and Claude Code, with a clean adapter path for future harnesses.
-- **Human session browser** — live and completed work can be selected, rejoined, viewed, archived, restored, or sacrificed without memorizing ids.
-- **Attachable PTY sessions** — live work can still be replayed/followed from explicit CLI verbs.
-- **Local daemon API** — comux, OpenMeow, and the external OpenClaw plugin can coordinate through the same socket contract.
-- **SQLite-backed history** — session metadata and event logs survive daemon restarts.
-- **Redacted logs by default** — event payloads are redacted before normal storage and API display; raw artifacts are opt-in, encrypted locally, and short-lived.
-- **Rust authority layer** — launch, cwd, input, kill, and path-sensitive requests are revalidated in Rust.
-- **External OpenClaw bridge** — `@opencoven/coven` is an opt-in plugin; OpenClaw core does not include Coven code.
-- **OpenCoven package shape** — CLI wrapper packages live under the `@opencoven/*` namespace while the command stays `coven`.
-
-## Commands
-
-| Command | Action |
-|---|---|
-| `coven` | Open the beginner-friendly interactive menu |
-| `coven tui` | Explicitly open the slash-command TUI |
-| `coven doctor` | Detect supported harness CLIs and print install hints |
-| `coven daemon start` | Start the local Coven daemon |
-| `coven daemon status` | Show daemon health, pid, and socket path |
-| `coven daemon restart` | Restart the local daemon and rebind the socket |
-| `coven daemon stop` | Stop the local daemon |
-| `coven run <harness> <prompt>` | Launch a project-scoped harness session |
-| `coven run <harness> <prompt> --cwd <path>` | Launch from a cwd inside the project root |
-| `coven run <harness> <prompt> --title <title>` | Set a readable session title |
-| `coven sessions` | Open the active session browser in a terminal; print a table when piped |
-| `coven sessions --all` | Browse active and archived sessions in a terminal; print all when piped |
-| `coven sessions --manage` | Force the interactive session browser |
-| `coven sessions --plain` | Force plain table output for scripts/copying |
-| `coven sessions --json` | Print a JSON `sessions` array for clients such as comux |
-| `coven attach <session-id>` | Replay/follow session output and forward input |
-| `coven summon <session-id>` | Restore an archived session, then replay/follow it |
-| `coven archive <session-id>` | Hide a non-running session from the active list while preserving events |
-| `coven sacrifice <session-id> --yes` | Permanently delete a non-running session and its events |
-| `coven logs prune` | Prune expired encrypted raw artifacts and old redacted event logs |
-
-Session rituals are intentionally explicit. **Archive** is reversible and keeps the ledger. **Summon** brings an archived session back into the active list. **Sacrifice** is destructive, refuses live sessions, and requires `--yes` so beginners do not delete work by accident.
-
-## Local API
-
-The daemon exposes a small versioned HTTP API over a Unix socket for first-party and external clients. The current public contract is **`coven.daemon.v1`** served under the `/api/v1` prefix.
-
-Coven's current auth posture is same-user local access over `<covenHome>/coven.sock`. It does not use daemon OAuth, JWTs, bearer tokens, API keys, or browser cookies; provider auth stays with the harness CLIs such as Codex and Claude Code. See [`docs/AUTH.md`](docs/AUTH.md) before adding a new client, dashboard, remote bridge, or browser-facing transport.
-
-| Endpoint | Purpose |
-|---|---|
-| `GET /api/v1/api-version` | Read the active API version and supported versions |
-| `GET /api/v1/health` | Check daemon health and metadata |
-| `GET /api/v1/sessions` | List sessions |
-| `POST /api/v1/sessions` | Launch a session |
-| `GET /api/v1/sessions/:id` | Fetch one session |
-| `GET /api/v1/events?sessionId=...` | Read session events |
-| `GET /api/v1/sessions/:id/events` | Read redacted session events |
-| `GET /api/v1/sessions/:id/log` | Read bounded redacted log previews |
-| `POST /api/v1/sessions/:id/input` | Forward input to a live session |
-| `POST /api/v1/sessions/:id/kill` | Kill a live session |
-
-Treat the socket API as the product contract. Clients may validate for UX, but the Rust daemon remains the authority boundary. See [`docs/API.md`](docs/API.md) for compatibility rules.
-
-Default API log and event responses are redacted. Raw sensitive artifacts are not returned by broad endpoints and remain unavailable unless explicit local debug persistence is enabled.
-
-Current stable contract: [`docs/API-CONTRACT.md`](docs/API-CONTRACT.md). `GET /api/v1/health` exposes the named contract `apiVersion: "coven.daemon.v1"` and machine-readable capabilities for client handshakes.
-
-## Requirements
-
-- Rust stable toolchain
-- Git
-- macOS or another Unix-like system for daemon socket / PTY behavior today
-- At least one supported harness CLI:
-  - [Codex](https://github.com/openai/codex)
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
-- Node.js 18+ only for npm wrapper/plugin package development
-
-If `coven doctor` reports a missing harness, install or expose one CLI on `PATH`, run the harness once to finish local authentication/setup, then retry `coven doctor`:
-
-```sh
-npm install -g @openai/codex
-# or: brew install --cask codex
-codex login
-
-npm install -g @anthropic-ai/claude-code
-claude doctor
-```
-
-## OpenCoven integrations
-
-- **comux** is the visual cockpit for agent panes and can consume Coven-managed sessions through the local API.
-- **OpenClaw** integrates only through the external `@opencoven/coven` plugin package.
-- **OpenMeow** can consume Coven session status, intake, or notifications as the desktop companion surface matures.
-
-Coven is the room where harnesses run. The clients decide how to present and route that work.
-
-## Documentation
-
-### Getting Started
-- [Getting started](docs/GETTING-STARTED.md)
-- [Concepts](docs/CONCEPTS.md)
-- [Glossary](docs/GLOSSARY.md)
-
-### Future orchestration
-- [Public roadmap](docs/ROADMAP.md) — planned multi-harness handoff and routing work.
-- [Glossary](docs/GLOSSARY.md) — future orchestration terms without current CLI/API promises.
-
-### Architecture & Reference
-- [comux + Coven demo loop](docs/COMUX-DEMO-LOOP.md)
-- [Architecture diagrams](docs/ARCHITECTURE.md)
-- [Session lifecycle](docs/SESSION-LIFECYCLE.md)
-- [Operational model](docs/OPERATIONAL-MODEL.md)
-- [Safety model](docs/SAFETY-MODEL.md)
-- [Client integration guide](docs/CLIENT-INTEGRATION.md)
-- [Harness adapter guide](docs/HARNESS-ADAPTERS.md)
-- [API contract](docs/API-CONTRACT.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-
-## Contributing
-
-See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for the recommended local development loop, release checks, and OpenCoven documentation rules.
-
-## Releasing
-
-Releases are **driven by a signed git tag**. Source versions stay `0.0.0` in the tree; the tag name (`v0.0.17` → `0.0.17`) is stamped into the wrapper and native packages by `scripts/publish-npm.mjs` at publish time. The full operator runbook, including the one-time npm trusted-publisher setup, is [`docs/reference/releasing.md`](docs/reference/releasing.md).
-
-Pre-flight locally (runs the secret-guard scan, packs the wrapper + native package, installs them into a throwaway project, and confirms the wrapper resolves and starts the native binary):
-
-```sh
-node scripts/test-cli-prepublish.mjs
-```
-
-Cut the release:
-
-```sh
-git tag -s v<X.Y.Z> -m "Coven v<X.Y.Z>"
-git push origin v<X.Y.Z>
-```
-
-That single push triggers `.github/workflows/release-npm.yml`, which:
-
-1. Runs the full Rust gate matrix (`fmt --check`, `clippy -D warnings`, `cargo test --workspace --locked`, secret-guard scan).
-2. **Refuses to proceed** unless the pushed tag is annotated and GitHub has cryptographically verified the maintainer's signature.
-3. Builds release binaries for macOS Apple Silicon, glibc-based Linux x64, and Windows x64.
-4. Runs `npm publish --dry-run` for every tarball as a final gate.
-5. Authenticates to npm via **GitHub Actions OIDC trusted publishing** and runs `npm publish --provenance --access public` for the three native packages and the wrapper. Every published tarball ships with a provenance attestation linking it to this exact workflow run and commit SHA.
-
-There is no `NPM_TOKEN` secret to rotate and no `workflow_dispatch` manual button — the signed tag is the only release lever. If the workflow ever refuses the tag, see [`docs/reference/releasing.md#recovering-from-a-refused-release`](docs/reference/releasing.md#recovering-from-a-refused-release).
-
-## Ecosystem
-
-| Repo | Description |
-|---|---|
-| [coven](https://github.com/OpenCoven/coven) | Core harness runtime — this repo |
-| [cast-codes](https://github.com/OpenCoven/cast-codes) | Canonical OpenCoven desktop application |
-| [coven-code](https://github.com/OpenCoven/coven-code) | Code agent harness for OpenCoven |
-| [desktop-use](https://github.com/OpenCoven/desktop-use) | Desktop automation / computer-use plugin |
-| [coven-reach](https://github.com/OpenCoven/coven-reach) | Reach / integration layer |
-| [coven-scout](https://github.com/OpenCoven/coven-scout) | Fast Rust MCP server — sandboxed filesystem & web access for agents |
-| [coven-docs](https://github.com/OpenCoven/coven-docs) | Documentation site |
-
-## Community
-
-- Discord: `discord.gg/opencoven`
-- X / Twitter: `@OpenCvn`
-
-## License
-
-MIT
+This README follows the DropShock repo documentation format: one clear identity, one visual map, a short operator path, explicit ownership, and deeper detail moved into linked docs when needed. If the repo grows, add or update `docs/ARCHITECTURE.md`, `docs/DEPLOYMENT.md`, and `docs/OPERATIONS.md` instead of turning the README into a wall of text.
