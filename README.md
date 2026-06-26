@@ -1,3 +1,56 @@
+
+<!-- README-ROAST:START -->
+
+## README Roast Pass
+
+Roasted with [https://github.com/hidai25/readme-roast](https://github.com/hidai25/readme-roast) on 2026-06-25. This block is evidence-only: repo metadata, root files, and the existing README were scanned before writing.
+
+### Fast roast
+
+- Pre-pass README score: **82/100** by the readme-roast categories: first impression, install friction, trust, visuals, and structure.
+- No clear H1 hero near the top.
+- Biggest fix in this pass: added a Mermaid repo map plus a quick operator scan without deleting the existing README content.
+
+### Mermaid repository map
+
+```mermaid
+flowchart TD
+  R["DropShock-Digital/coven"]
+  R --> N1["Cargo.toml"]
+  R --> N2["README.md"]
+  R --> N3["packages/"]
+  R --> N4["docs/"]
+  R --> N5["scripts/"]
+  R --> N6["web/"]
+  R --> N7["assets/"]
+  R --> N8["brand/"]
+  R --> N9["crates/"]
+  R --> N10["npm/"]
+  R --> N11["skills/"]
+  R --> N12["specs/"]
+  R --> MORE["additional repo files"]
+```
+
+### Operator quick scan
+
+| Signal | Evidence |
+|---|---|
+| GitHub repo | [DropShock-Digital/coven](https://github.com/DropShock-Digital/coven) |
+| Description | Local harness substrate for project-scoped agent sessions. |
+| Default branch | `main` |
+| Primary languages | Rust 86%, TypeScript 7%, JavaScript 2%, HTML 2%, Python 1% |
+| Install path | `cargo fetch` |
+| Run/build hint | Not detected from root files |
+| Key files scanned | Cargo.toml, README.md, packages/, docs/, scripts/, web/ |
+
+### README next upgrades
+
+- Add real screenshots, GIFs, or CLI output once the repo has a stable demo path.
+- Pin exact setup commands after verifying them in a clean environment.
+- Link production/staging/docs only when the URL is durable and intended for readers.
+
+<!-- README-ROAST:END -->
+
 <p align="center">
   <img src="assets/opencoven/opencoven.svg" alt="OpenCoven logo" width="128" height="128">
 </p>
